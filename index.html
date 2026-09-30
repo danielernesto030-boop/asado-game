@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Asado Tycoon</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; color: #fff; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 3px #000; }
+  #money { top: 14px; left: 18px; font-size: 26px; font-weight: 700; color: #ffd76a; }
+  #orders { top: 14px; right: 18px; font-size: 16px; text-align: right; line-height: 1.5; background: #0007; padding: 8px 12px; border-radius: 6px; min-width: 170px; }
+  #orders b { color: #ffd76a; }
+  #prompt { bottom: 60px; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: 600; white-space: nowrap; }
+  #msg { bottom: 100px; left: 50%; transform: translateX(-50%); font-size: 22px; font-weight: 700; color: #9f6; }
+  #cross { top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000b; cursor: pointer; text-align: center; }
+  #start h1 { font-size: 56px; margin: 0 0 10px; color: #ffb347; }
+  #start p { font-size: 18px; margin: 4px; }
+</style>
+</head>
+<body>
+<div id="money" class="hud">Money: $0</div>
+<div id="orders" class="hud"></div>
+<div id="msg" class="hud"></div>
+<div id="prompt" class="hud"></div>
+<div id="cross" class="hud"></div>
+<div id="start">
+  <h1>ASADO TYCOON</h1>
+  <p>WASD move · Mouse look · E interact</p>
+  <p>Take orders at the counter, grill the food, serve the tables before it burns.</p>
+  <p><b>Click to play</b></p>
+</div>
+<script type="module" src="/main.js"></script>
+</body>
+</html>
