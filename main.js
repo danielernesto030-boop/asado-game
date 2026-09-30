@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // ---------- Config ----------
 const FOODS = {
@@ -187,31 +188,89 @@ const counterLabel = makeLabel('PEDIDOS', 0.4);
 counterLabel.position.set(-4.5, 2.2, -3.5);
 scene.add(counterLabel);
 
-// Grill
+// Grill — low-poly Argentine parrilla: brick base (collider + interaction target), iron grate, crank, side brasero, hood
 const grill = box(3, 0.9, 0.9, brickMats(3, 0.9, 0.9), 4.5, 0.45, -5.3);
 grill.userData.kind = 'grill';
 const coalTex = tex('coals');
-const coals = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.7),
-  new THREE.MeshStandardMaterial({ map: coalTex, emissiveMap: coalTex, emissive: 0xffffff, emissiveIntensity: 0.8 }));
+const emberMat = new THREE.MeshStandardMaterial({ map: coalTex, emissiveMap: coalTex, emissive: 0xffffff, emissiveIntensity: 0.8 });
+const coals = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.7), emberMat);
 coals.rotation.x = -Math.PI / 2;
 coals.position.set(4.5, 0.905, -5.3);
 coals.userData.kind = 'grill';
 scene.add(coals);
-for (let i = 0; i < 12; i++) box(0.03, 0.03, 0.8, 0x111111, 3.15 + i * 0.245, 0.92, -5.3, false); // grate bars
-box(3.2, 0.4, 1.1, 0x555555, 4.5, 3.1, -5.35, false); // hood
+
+const iron = new THREE.MeshStandardMaterial({ color: 0x1e1e1e, metalness: 0.7, roughness: 0.45 });
+function part(geo, material, x, y, z, parent = scene) {
+  const m = new THREE.Mesh(geo, material);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  parent.add(m);
+  return m;
+}
+const rod = (r, len) => new THREE.CylinderGeometry(r, r, len, 6);
+const grateBar = rod(0.012, 0.84).rotateX(Math.PI / 2);
+for (let i = 0; i < 15; i++) part(grateBar, iron, 3.1 + i * 0.2, 0.935, -5.3);
+for (const z of [-4.88, -5.72]) part(new THREE.BoxGeometry(2.9, 0.05, 0.04), iron, 4.5, 0.94, z); // frame
+for (const x of [3.05, 5.95]) part(new THREE.BoxGeometry(0.04, 0.05, 0.86), iron, x, 0.94, -5.3);
+// height crank on the front
+const crank = new THREE.Group();
+crank.position.set(3.3, 0.68, -4.82);
+part(new THREE.TorusGeometry(0.11, 0.014, 6, 14), iron, 0, 0, 0, crank);
+part(new THREE.BoxGeometry(0.22, 0.02, 0.02), iron, 0, 0, 0, crank);
+part(new THREE.BoxGeometry(0.02, 0.22, 0.02), iron, 0, 0, 0, crank);
+part(rod(0.015, 0.1).rotateX(Math.PI / 2), iron, 0.08, 0.08, 0.05, crank);
+scene.add(crank);
+// side brasero: brick pedestal + iron basket with burning logs
+box(0.7, 0.9, 0.9, brickMats(0.7, 0.9, 0.9), 6.4, 0.45, -5.3);
+part(new THREE.PlaneGeometry(0.6, 0.6), emberMat, 6.4, 0.905, -5.3).rotation.x = -Math.PI / 2;
+const cageBar = rod(0.01, 0.45);
+for (let i = 0; i < 5; i++) {
+  const o = -0.25 + i * 0.125;
+  for (const [dx, dz] of [[o, -0.25], [o, 0.25], [-0.25, o], [0.25, o]]) part(cageBar, iron, 6.4 + dx, 1.13, -5.3 + dz);
+}
+for (const y of [0.92, 1.35]) {
+  for (const dz of [-0.25, 0.25]) part(new THREE.BoxGeometry(0.52, 0.02, 0.02), iron, 6.4, y, -5.3 + dz);
+  for (const dx of [-0.25, 0.25]) part(new THREE.BoxGeometry(0.02, 0.02, 0.52), iron, 6.4 + dx, y, -5.3);
+}
+const logGeo = rod(0.045, 0.42).rotateZ(Math.PI / 2);
+for (const [y, dz, ry] of [[0.96, 0.1, 0.4], [0.96, -0.1, -0.3], [1.04, 0, 1.4]]) part(logGeo, mat(0x5a3b22), 6.4, y, -5.3 + dz).rotation.y = ry;
+const flames = [[0, 0, 0.34, 0xff8a1a], [0.1, 0.06, 0.22, 0xff6a10], [-0.09, -0.05, 0.26, 0xff8a1a], [0, 0, 0.18, 0xffd23a]].map(([dx, dz, h, c]) => {
+  const f = part(new THREE.ConeGeometry(0.07, h, 6).translate(0, h / 2, 0), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.85 }), 6.4 + dx, 1.02, -5.3 + dz);
+  f.castShadow = false;
+  return f;
+});
+// hood + chimney
+const hoodMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, metalness: 0.5, roughness: 0.6, side: THREE.DoubleSide });
+const hood = part(new THREE.CylinderGeometry(0.5, 1.9, 0.7, 4, 1, true).rotateY(Math.PI / 4), hoodMat, 4.8, 2.95, -5.3);
+hood.scale.set(1.49, 1, 0.45);
+hood.castShadow = false;
+part(new THREE.CylinderGeometry(0.16, 0.16, 1.1, 10), hoodMat, 4.8, 3.85, -5.3).castShadow = false;
 const grillLabel = makeLabel('PARRILLA', 0.4);
-grillLabel.position.set(4.5, 2.5, -5.2);
+grillLabel.position.set(4.5, 2.4, -5.2);
 scene.add(grillLabel);
 const SLOTS = [3.6, 4.5, 5.4];
 const slotCount = () => (has('grill') ? 3 : 2);
 
 // Tables
+const clothTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#f4efe6'; g.fillRect(0, 0, 64, 64);
+  g.fillStyle = '#b8342c';
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) if ((i + j) % 2) g.fillRect(i * 8, j * 8, 8, 8);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.magFilter = THREE.NearestFilter;
+  return t;
+})();
+const clothMat = new THREE.MeshStandardMaterial({ map: clothTex, roughness: 0.95 });
 const tables = [
   { x: 0, z: 0.5 }, { x: 4, z: 0.5 }, { x: 0, z: 3.8 }, { x: 4, z: 3.8 },
 ].map((t, i) => {
   const g = new THREE.Group();
   g.position.set(t.x, 0, t.z);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 1.2), mat(0x9c6b3c));
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 1.2), clothMat);
   top.position.y = 0.75;
   const leg = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.75, 0.15), mat(0x5a3a1a));
   leg.position.y = 0.37;
@@ -221,7 +280,9 @@ const tables = [
   back.position.set(-1.25, 0.75, 0);
   const cleg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.1), mat(0x5a3a1a));
   cleg.position.set(-1, 0.22, 0);
-  g.add(top, leg, seat, back, cleg);
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.12, 0.012, 16), mat(0xf4f4f0));
+  plate.position.set(-0.3, 0.797, 0);
+  g.add(top, leg, seat, back, cleg, plate);
   g.traverse(o => { o.castShadow = o.receiveShadow = true; });
   const label = makeLabel(String(i + 1), 0.3);
   label.position.set(0, 1.2, 0);
@@ -252,12 +313,62 @@ const upgradePanels = UPGRADES.map((u, i) => {
 wallPanel('MEJORAS', 0.08, 2.3, 1.2, 0.3, '#000a');
 
 // ---------- Food ----------
+// Low-poly food: each model is ONE merged geometry (details via vertex colors), so the cooking tint on its single material still works.
+function paint(geo, hex) {
+  const c = new THREE.Color(hex), n = geo.attributes.position.count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) a.set([c.r, c.g, c.b], i * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(a, 3));
+  return geo;
+}
+const merge = parts => mergeGeometries(parts.map(g => (g.index ? g.toNonIndexed() : g)));
+function planarUV(geo, size) { // top-down texture projection
+  const p = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / size + 0.5, p.getZ(i) / size + 0.5);
+  return geo;
+}
+const V2 = (x, y) => new THREE.Vector2(x, y);
+const FOOD_GEO = {
+  chorizo() { // curved sausage with rounded, tied ends
+    const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(-0.15, 0, 0), new THREE.Vector3(0, 0, 0.07), new THREE.Vector3(0.15, 0, 0));
+    const parts = [paint(new THREE.TubeGeometry(curve, 10, 0.045, 8), 0xffffff)];
+    for (const t of [0, 1]) {
+      const p = curve.getPoint(t), d = curve.getTangent(t).multiplyScalar(t ? 1 : -1);
+      parts.push(paint(new THREE.SphereGeometry(0.045, 8, 6).translate(p.x, p.y, p.z), 0xffffff));
+      const k = p.clone().addScaledVector(d, 0.055);
+      parts.push(paint(new THREE.SphereGeometry(0.016, 5, 4).translate(k.x, k.y, k.z), 0xe8d8b0));
+    }
+    return merge(parts).translate(0, 0.015, 0);
+  },
+  vacio() { // irregular beveled slab with grill marks
+    const jitter = [1, 0.93, 1.04, 0.97, 1.07, 0.95, 1, 0.91, 1.05, 0.96, 1.06, 0.94, 1.02, 0.97];
+    const shape = new THREE.Shape(jitter.map((j, i) => {
+      const a = i / jitter.length * Math.PI * 2;
+      return V2(Math.cos(a) * 0.17 * j, Math.sin(a) * 0.11 * j);
+    }));
+    const slab = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.012, bevelSegments: 2 });
+    slab.rotateX(-Math.PI / 2).translate(0, -0.015, 0);
+    const parts = [paint(planarUV(slab, 0.36), 0xffffff)];
+    for (const [off, len] of [[-0.055, 0.15], [0, 0.22], [0.055, 0.15]]) {
+      parts.push(paint(new THREE.BoxGeometry(len, 0.004, 0.014).translate(0, 0, off).rotateY(0.6).translate(0, 0.052, 0), 0x2a1a12));
+    }
+    return merge(parts);
+  },
+  provoleta() { // melted cheese puck in a small iron pan, with oregano
+    const cheese = new THREE.LatheGeometry([V2(0.001, -0.015), V2(0.1, -0.015), V2(0.118, -0.004), V2(0.122, 0.01), V2(0.114, 0.026), V2(0.085, 0.036), V2(0.04, 0.041), V2(0.001, 0.042)], 16);
+    const pan = new THREE.LatheGeometry([V2(0.001, -0.03), V2(0.13, -0.03), V2(0.142, -0.02), V2(0.145, 0.004), V2(0.137, 0.004), V2(0.132, -0.018), V2(0.001, -0.018)], 16);
+    const parts = [paint(planarUV(cheese, 0.26), 0xffffff), paint(planarUV(pan, 0.3), 0x3a3a3a)];
+    for (let i = 0; i < 9; i++) {
+      const a = i * 2.4, r = 0.02 + (i % 3) * 0.028;
+      parts.push(paint(new THREE.BoxGeometry(0.014, 0.004, 0.009).rotateY(a).translate(Math.cos(a) * r, 0.043 - r * 0.06, Math.sin(a) * r), 0x3f5e22));
+    }
+    return merge(parts);
+  },
+};
+const foodGeo = {}, foodTex = {};
 function makeFoodMesh(type) {
-  let geo;
-  if (type === 'chorizo') { geo = new THREE.CapsuleGeometry(0.06, 0.25, 4, 8); geo.rotateZ(Math.PI / 2); }
-  else if (type === 'vacio') geo = new THREE.BoxGeometry(0.35, 0.06, 0.22);
-  else geo = new THREE.CylinderGeometry(0.13, 0.13, 0.05, 16);
-  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex(type), roughness: 0.5 }));
+  foodGeo[type] ||= FOOD_GEO[type]();
+  foodTex[type] ||= tex(type);
+  const m = new THREE.Mesh(foodGeo[type], new THREE.MeshStandardMaterial({ map: foodTex[type], roughness: 0.5, vertexColors: true }));
   m.material.color.setRGB(...FOODS[type].raw);
   m.castShadow = true;
   return m;
@@ -314,26 +425,98 @@ function dropHeld() {
 }
 
 // ---------- Customers ----------
-const SHIRTS = [0x3a6ea5, 0xc94c4c, 0x4c9c5a, 0xd9a13b, 0x8a5ca8, 0x2f8f8f];
+// One reusable low-poly person (shared geometry); only colors, scale and accessories vary.
+const SHIRTS = [0x3a6ea5, 0xc94c4c, 0x4c9c5a, 0xd9a13b, 0x8a5ca8, 0x2f8f8f, 0xf0f0f0];
+const SKINS = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
+const HAIRS = [0x2b1d0e, 0x4a3020, 0x111111, 0x8a6a3a, 0xa8a8a8];
+const PANTS = [0x2d3a4f, 0x3b3b3b, 0x5a4632, 0x1f2f5a, 0x6b6b5a];
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const PG = {
+  thigh: new THREE.CylinderGeometry(0.075, 0.065, 0.35, 6).translate(0, -0.175, 0),
+  shin: new THREE.CylinderGeometry(0.063, 0.052, 0.43, 6).translate(0, -0.215, 0),
+  foot: new THREE.BoxGeometry(0.1, 0.07, 0.2).translate(0, -0.465, 0.04),
+  pelvis: new THREE.BoxGeometry(0.3, 0.14, 0.18),
+  torso: new THREE.CylinderGeometry(0.2, 0.16, 0.5, 7).scale(1, 1, 0.7),
+  upperArm: new THREE.CylinderGeometry(0.058, 0.05, 0.3, 6).translate(0, -0.15, 0),
+  foreArm: new THREE.CylinderGeometry(0.045, 0.04, 0.24, 6).translate(0, -0.42, 0),
+  hand: new THREE.IcosahedronGeometry(0.05, 0).translate(0, -0.57, 0),
+  neck: new THREE.CylinderGeometry(0.05, 0.055, 0.1, 6),
+  head: new THREE.IcosahedronGeometry(0.15, 1),
+  hair: new THREE.SphereGeometry(0.158, 8, 4, 0, Math.PI * 2, 0, Math.PI * 0.55),
+  eye: new THREE.BoxGeometry(0.03, 0.035, 0.03),
+  nose: new THREE.ConeGeometry(0.025, 0.06, 4).rotateX(Math.PI / 2),
+  mustache: new THREE.BoxGeometry(0.1, 0.022, 0.025),
+  boina: new THREE.CylinderGeometry(0.165, 0.175, 0.05, 10),
+};
+function makePerson() {
+  const lp = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, flatShading: true });
+  const shirt = lp(pick(SHIRTS)), skin = lp(pick(SKINS)), pants = lp(pick(PANTS)), hair = lp(pick(HAIRS)), dark = lp(0x1a1a1a);
+  const root = new THREE.Group(), body = new THREE.Group();
+  body.scale.setScalar(0.94 + Math.random() * 0.12);
+  root.add(body);
+  const legs = [-1, 1].map(side => {
+    const hip = new THREE.Group(), knee = new THREE.Group();
+    hip.position.set(side * 0.09, 0.85, 0);
+    knee.position.y = -0.35;
+    part(PG.thigh, pants, 0, 0, 0, hip);
+    part(PG.shin, pants, 0, 0, 0, knee);
+    part(PG.foot, dark, 0, 0, 0, knee);
+    hip.add(knee);
+    body.add(hip);
+    return { hip, knee };
+  });
+  part(PG.pelvis, pants, 0, 0.88, 0, body);
+  part(PG.torso, shirt, 0, 1.19, 0, body);
+  const arms = [-1, 1].map(side => {
+    const sh = new THREE.Group();
+    sh.position.set(side * 0.235, 1.4, 0);
+    sh.rotation.z = side * 0.08;
+    part(PG.upperArm, shirt, 0, 0, 0, sh);
+    part(PG.foreArm, skin, 0, 0, 0, sh);
+    part(PG.hand, skin, 0, 0, 0, sh);
+    body.add(sh);
+    return sh;
+  });
+  part(PG.neck, skin, 0, 1.47, 0, body);
+  part(PG.head, skin, 0, 1.62, 0, body);
+  part(PG.hair, hair, 0, 1.635, -0.012, body).rotation.x = -0.35;
+  for (const x of [-0.05, 0.05]) part(PG.eye, dark, x, 1.635, 0.14, body);
+  part(PG.nose, skin, 0, 1.6, 0.155, body);
+  const r = Math.random();
+  if (r < 0.3) part(PG.boina, lp(pick([0x1a1a2a, 0x7a1f1f, 0x2b3a2b])), 0, 1.765, -0.01, body).rotation.z = 0.15;
+  else if (r < 0.55) part(PG.mustache, hair, 0, 1.565, 0.14, body);
+  return { root, body, legs, arms, t: Math.random() * 10, lx: 0, lz: 0 };
+}
+
+// Simple procedural pose: walk swing, sitting, eating (visual only)
+function poseCustomer(c, dt) {
+  const r = c.rig, p = c.group.position;
+  const moving = Math.hypot(p.x - r.lx, p.z - r.lz) > 1e-4;
+  r.lx = p.x; r.lz = p.z; r.t += dt;
+  const sitting = c.state === 'wait' || c.state === 'eat';
+  const s = moving && !sitting ? Math.sin(r.t * 9) * 0.5 : 0;
+  r.body.position.y = sitting ? -0.09 : 0;
+  r.legs.forEach((l, i) => {
+    l.hip.rotation.x = sitting ? -Math.PI / 2 : (i ? -s : s);
+    l.knee.rotation.x = sitting ? Math.PI / 2 : Math.max(0, i ? -s : s) * 0.8;
+  });
+  r.arms.forEach((a, i) => { a.rotation.x = sitting ? -0.7 : (i ? s : -s) * 0.8; });
+  if (c.state === 'eat') r.arms[1].rotation.x = -1.3 + Math.sin(r.t * 6) * 0.35;
+}
 function spawnCustomer() {
   const free = tables.filter(t => t.active && !t.customer);
   if (!free.length) return;
   const table = free[Math.floor(Math.random() * free.length)];
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.7, 4, 8), mat(SHIRTS[Math.floor(Math.random() * SHIRTS.length)]));
-  body.position.y = 0.6;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), mat(0xe0b08a));
-  head.position.y = 1.4;
-  g.add(body, head);
-  g.traverse(o => { o.castShadow = true; });
+  const rig = makePerson();
+  const g = rig.root;
   g.position.copy(OUTSIDE);
   const bar = makeBar();
-  bar.position.y = 1.9;
+  bar.position.y = 2.0;
   g.add(bar);
   const c = {
     group: g, bar, table, state: 'enter', path: [DOOR_IN.clone()],
     order: FOOD_KEYS[Math.floor(Math.random() * 3)], patience: QUEUE_PATIENCE, maxPatience: QUEUE_PATIENCE,
-    orderedAt: 0, bubble: null, food: null, eatT: 0,
+    orderedAt: 0, bubble: null, food: null, eatT: 0, rig,
   };
   g.userData = { kind: 'customer', ref: c };
   table.customer = c;
@@ -441,6 +624,7 @@ function updateCustomer(c, dt) {
   } else if (c.state !== 'exit') {
     setBar(c.bar, 1, 0x44dd44);
   }
+  poseCustomer(c, dt);
 }
 
 // ---------- Interaction ----------
@@ -600,6 +784,7 @@ function frame() {
 
     for (const c of [...customers]) updateCustomer(c, dt);
     coals.material.emissiveIntensity = 0.7 + Math.sin(performance.now() / 200) * 0.15;
+    flames.forEach((f, i) => { f.scale.y = 1 + Math.sin(performance.now() / 70 + i * 1.7) * 0.2; });
     if (msgTimer > 0 && (msgTimer -= dt) <= 0) msgEl.textContent = '';
   } else if (sizzleGain) sizzleGain.gain.value = 0;
 
