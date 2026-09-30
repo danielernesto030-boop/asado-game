@@ -2,9 +2,10 @@ import * as THREE from 'three';
 
 // ---------- Config ----------
 const FOODS = {
-  chorizo:   { name: 'Chorizo',   price: 15, cook: 9,  burn: 8, raw: 0xc0504d, done: 0x7a2e1a },
-  vacio:     { name: 'Vacío',     price: 25, cook: 13, burn: 8, raw: 0xd9807a, done: 0x8b4a2b },
-  provoleta: { name: 'Provoleta', price: 20, cook: 7,  burn: 6, raw: 0xf5e6a8, done: 0xd9a441 },
+  // raw = RGB tint over the cooked texture (>1 brightens, so raw looks pale/pink)
+  chorizo:   { name: 'Chorizo',   price: 15, cook: 9,  burn: 8, raw: [1.7, 1.2, 1.2] },
+  vacio:     { name: 'Vacío',     price: 25, cook: 13, burn: 8, raw: [1.9, 1.2, 1.25] },
+  provoleta: { name: 'Provoleta', price: 20, cook: 7,  burn: 6, raw: [1.15, 1.15, 1.2] },
 };
 const FOOD_KEYS = Object.keys(FOODS);
 const QUEUE_PATIENCE = 40, WAIT_PATIENCE = 75, EAT_TIME = 6;
@@ -56,7 +57,7 @@ sun.castShadow = true;
 sun.shadow.camera.left = -10; sun.shadow.camera.right = 10;
 sun.shadow.camera.top = 10; sun.shadow.camera.bottom = -10;
 scene.add(sun);
-const grillLight = new THREE.PointLight(0xff7a2a, 8, 6);
+const grillLight = new THREE.PointLight(0xff7a2a, 3, 6);
 grillLight.position.set(4.5, 1.6, -4.8);
 scene.add(grillLight);
 
@@ -64,8 +65,24 @@ scene.add(grillLight);
 const mat = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8 });
 const colliders = [];
 
+// Textures generated with Higgsfield (public/textures)
+const loader = new THREE.TextureLoader();
+function tex(name, rx = 1, ry = 1) {
+  const t = loader.load(`textures/${name}.jpg`);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  return t;
+}
+const texMat = (name, rx, ry) => new THREE.MeshStandardMaterial({ map: tex(name, rx, ry), roughness: 0.9 });
+// per-face tiling so bricks keep their size on every face (BoxGeometry order: ±x, ±y, ±z)
+function brickMats(w, h, d, s = 1.2) {
+  const x = texMat('brick', d / s, h / s), y = texMat('brick', w / s, d / s), z = texMat('brick', w / s, h / s);
+  return [x, x, y, y, z, z];
+}
+
 function box(w, h, d, color, x, y, z, collide = true) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), typeof color === 'number' ? mat(color) : color);
   m.position.set(x, y, z);
   m.castShadow = m.receiveShadow = true;
   scene.add(m);
@@ -144,7 +161,7 @@ const sfx = {
 };
 
 // ---------- Restaurant ----------
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(16, 12), mat(0xb5623c));
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(16, 12), texMat('floor', 6.7, 5));
 floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 scene.add(floor);
@@ -154,7 +171,7 @@ street.position.set(0, -0.01, 9);
 scene.add(street);
 
 const WALL = 0xf0e0c0, WH = 3.5;
-box(16, WH, 0.2, WALL, 0, WH / 2, -6);          // back
+box(16, WH, 0.2, brickMats(16, WH, 0.2), 0, WH / 2, -6); // back (brick)
 box(0.2, WH, 12, WALL, -8, WH / 2, 0);          // left
 box(0.2, WH, 12, WALL, 8, WH / 2, 0);           // right
 box(0.8, WH, 0.2, WALL, -7.6, WH / 2, 6);       // front, left of door
@@ -171,12 +188,15 @@ counterLabel.position.set(-4.5, 2.2, -3.5);
 scene.add(counterLabel);
 
 // Grill
-const grill = box(3, 0.9, 0.9, 0x333333, 4.5, 0.45, -5.3);
+const grill = box(3, 0.9, 0.9, brickMats(3, 0.9, 0.9), 4.5, 0.45, -5.3);
 grill.userData.kind = 'grill';
-const coals = box(2.8, 0.05, 0.7, 0xff5a1a, 4.5, 0.86, -5.3, false);
-coals.material.emissive = new THREE.Color(0xff3a00);
-coals.material.emissiveIntensity = 0.8;
+const coalTex = tex('coals');
+const coals = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.7),
+  new THREE.MeshStandardMaterial({ map: coalTex, emissiveMap: coalTex, emissive: 0xffffff, emissiveIntensity: 0.8 }));
+coals.rotation.x = -Math.PI / 2;
+coals.position.set(4.5, 0.905, -5.3);
 coals.userData.kind = 'grill';
+scene.add(coals);
 for (let i = 0; i < 12; i++) box(0.03, 0.03, 0.8, 0x111111, 3.15 + i * 0.245, 0.92, -5.3, false); // grate bars
 box(3.2, 0.4, 1.1, 0x555555, 4.5, 3.1, -5.35, false); // hood
 const grillLabel = makeLabel('PARRILLA', 0.4);
@@ -237,7 +257,8 @@ function makeFoodMesh(type) {
   if (type === 'chorizo') { geo = new THREE.CapsuleGeometry(0.06, 0.25, 4, 8); geo.rotateZ(Math.PI / 2); }
   else if (type === 'vacio') geo = new THREE.BoxGeometry(0.35, 0.06, 0.22);
   else geo = new THREE.CylinderGeometry(0.13, 0.13, 0.05, 16);
-  const m = new THREE.Mesh(geo, mat(FOODS[type].raw));
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex(type), roughness: 0.5 }));
+  m.material.color.setRGB(...FOODS[type].raw);
   m.castShadow = true;
   return m;
 }
@@ -566,10 +587,10 @@ function frame() {
     for (const f of [...grillFood]) {
       f.t += dt * speed;
       const d = FOODS[f.type], st = foodState(f);
-      const col = new THREE.Color(d.raw);
-      if (st === 'cooking') col.lerp(new THREE.Color(d.done), f.t / d.cook);
-      else if (st === 'ready') col.set(d.done).lerp(new THREE.Color(0x2a1a10), (f.t - d.cook) / d.burn * 0.6);
-      else col.set(0x151515);
+      const col = new THREE.Color().setRGB(...d.raw);
+      if (st === 'cooking') col.lerp(new THREE.Color(1, 1, 1), f.t / d.cook);
+      else if (st === 'ready') col.setRGB(1, 1, 1).lerp(new THREE.Color(0.3, 0.2, 0.15), (f.t - d.cook) / d.burn * 0.7);
+      else col.setRGB(0.02, 0.018, 0.018);
       f.mesh.material.color.copy(col);
       if (st === 'cooking') setBar(f.bar, f.t / d.cook, 0xffcc33);
       else if (st === 'ready') setBar(f.bar, 1 - (f.t - d.cook) / d.burn, Math.floor(f.t * 4) % 2 && f.t - d.cook > d.burn * 0.6 ? 0xff4444 : 0x44dd44);
