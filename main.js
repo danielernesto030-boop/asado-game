@@ -321,9 +321,13 @@ function paint(geo, hex) {
   return geo;
 }
 const merge = parts => mergeGeometries(parts.map(g => (g.index ? g.toNonIndexed() : g)));
-function planarUV(geo, size) { // top-down texture projection
+// top-down texture projection for the first `caps` vertices; the rest keep their own UVs (in metres) at the same scale
+function planarUV(geo, size, caps = geo.attributes.position.count) {
   const p = geo.attributes.position, uv = geo.attributes.uv;
-  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / size + 0.5, p.getZ(i) / size + 0.5);
+  for (let i = 0; i < p.count; i++) {
+    if (i < caps) uv.setXY(i, p.getX(i) / size + 0.5, p.getZ(i) / size + 0.5);
+    else uv.setXY(i, uv.getX(i) / size, uv.getY(i) / size);
+  }
   return geo;
 }
 const V2 = (x, y) => new THREE.Vector2(x, y);
@@ -347,7 +351,7 @@ const FOOD_GEO = {
     }));
     const slab = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.012, bevelSegments: 2 });
     slab.rotateX(-Math.PI / 2).translate(0, -0.015, 0);
-    const parts = [paint(planarUV(slab, 0.36), 0xffffff)];
+    const parts = [paint(planarUV(slab, 0.36, slab.groups[0].count), 0xffffff)]; // group 0 = top/bottom caps
     for (const [off, len] of [[-0.055, 0.15], [0, 0.22], [0.055, 0.15]]) {
       parts.push(paint(new THREE.BoxGeometry(len, 0.004, 0.014).translate(0, 0, off).rotateY(0.6).translate(0, 0.052, 0), 0x2a1a12));
     }
