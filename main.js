@@ -101,6 +101,17 @@ const CHARS = {
   senora:  { file: 'senora.glb',  crotch: 0.17, shift: 0.11, squash: 0.89 },
 };
 const CUSTOMER_TYPES = ['grandpa', 'fan', 'senora'];
+// Higgsfield props (public/models): turn (the models face +x), uniform scale, bottom centre at the origin.
+// The parrilla's grate section (model z between its end walls) is stretched so the grate covers every grill spot.
+const PROPS = {
+  parrilla: { file: 'parrilla.glb', rot: -Math.PI / 2, scale: 2.03, stretch: [-0.252, 0.394, 1.983] },
+  table:    { file: 'table.glb', rot: 0, scale: 1.2 },          // top at 0.79
+  chair:    { file: 'chair.glb', rot: -Math.PI / 2, scale: 1.078 }, // seat at SEAT_TOP
+  pos:      { file: 'pos.glb', rot: -Math.PI / 2, scale: 0.84 },
+  plant:    { file: 'plant.glb', rot: 0, scale: 1 },
+  winerack: { file: 'winerack.glb', rot: 0, scale: 1.1 },
+  plates:   { file: 'plates_shelf.glb', rot: -Math.PI / 2, scale: 0.75 },
+};
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
 const menu = () => Object.keys(FOODS).filter(d => d !== 'bife' || has('menu'));
@@ -147,8 +158,8 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-scene.add(new THREE.HemisphereLight(0xfff4e0, 0x604030, 1.4));
-const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+scene.add(new THREE.HemisphereLight(0xffe6c4, 0x5a3820, 1.35)); // warm light all over
+const sun = new THREE.DirectionalLight(0xffe2b8, 1.1);
 sun.position.set(4, 10, 6);
 sun.castShadow = true;
 sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
@@ -158,7 +169,7 @@ scene.add(sun);
 const grillLight = new THREE.PointLight(0xff7a2a, 3, 6);
 grillLight.position.set(4.5, 1.6, -4.8);
 scene.add(grillLight);
-const kitchenLight = new THREE.PointLight(0xf4f8ff, 12, 14);
+const kitchenLight = new THREE.PointLight(0xfff0dc, 12, 14);
 kitchenLight.position.set(2.5, 3.2, -9);
 scene.add(kitchenLight);
 const officeLight = new THREE.PointLight(0xffe2b0, 6, 7);
@@ -171,18 +182,31 @@ const colliders = [], solids = []; // solids also block the interaction ray
 
 // Textures generated with Higgsfield (public/textures)
 const loader = new THREE.TextureLoader();
+const texImg = {}; // one image per file, shared by every repeat of it
 function tex(name, rx = 1, ry = 1) {
-  const t = loader.load(`textures/${name}.jpg`);
+  const src = texImg[name] ||= { img: loader.load(`textures/${name}.jpg`, () => src.uses.forEach(t => { t.needsUpdate = true; })), uses: [] };
+  const t = new THREE.Texture();
+  t.source = src.img.source;
+  if (t.image) t.needsUpdate = true; else src.uses.push(t);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(rx, ry);
   return t;
 }
 const texMat = (name, rx, ry) => new THREE.MeshStandardMaterial({ map: tex(name, rx, ry), roughness: 0.9 });
-// per-face tiling so bricks keep their size on every face (BoxGeometry order: ±x, ±y, ±z)
-function brickMats(w, h, d, s = 1.2) {
-  const x = texMat('brick', d / s, h / s), y = texMat('brick', w / s, d / s), z = texMat('brick', w / s, h / s);
+// per-face tiling so a texture (bricks by default) keeps its size on every face (BoxGeometry order: ±x, ±y, ±z)
+function brickMats(w, h, d, s = 1.2, name = 'brick') {
+  const x = texMat(name, d / s, h / s), y = texMat(name, w / s, d / s), z = texMat(name, w / s, h / s);
   return [x, x, y, y, z, z];
+}
+// Higgsfield props load once (see PROPS); onProp(name, place) runs place(lib) when the model is ready, and each
+// placement is a mesh sharing the model's geometry and material. Until then the procedural stand-ins stay.
+const propLib = {}, propWait = {};
+function onProp(name, place) { if (propLib[name]) place(propLib[name]); else (propWait[name] ||= []).push(place); }
+function makeProp(L) {
+  const m = new THREE.Mesh(L.geo, L.mat);
+  m.castShadow = m.receiveShadow = true;
+  return m;
 }
 
 function box(w, h, d, color, x, y, z, collide = true) {
@@ -285,7 +309,7 @@ function flat(w, d, material, x, z, y = 0) { // floor / ground patch
 }
 flat(70, 70, 0x6d7a58, 0, 0, -0.02);             // grass
 flat(16, 6, 0x777777, 0, 9, -0.01);              // street
-flat(16, 12, texMat('floor', 6.7, 5), 0, 0);     // dining room
+flat(16, 12, texMat('calcareas', 16 / 1.2, 12 / 1.2), 0, 0); // dining room: calcáreas tiles
 const kitchenTiles = texMat('floor', 6.7, 2.5);
 kitchenTiles.color.set(0xbfc8c8);
 flat(16, 6, kitchenTiles, 0, -9);                // back of house
@@ -296,17 +320,18 @@ const WALL = 0xf0e0c0, WH = 3.5;
 box(9, WH, 0.2, brickMats(9, WH, 0.2), -3.5, WH / 2, -6);    // brick wall behind the grill,
 box(5.4, WH, 0.2, brickMats(5.4, WH, 0.2), 5.3, WH / 2, -6); // kitchen doorway at x 1..2.6
 box(1.6, 1.1, 0.2, brickMats(1.6, 1.1, 0.2), 1.8, WH - 0.55, -6, false);
-box(0.2, WH, 12, WALL, -8, WH / 2, 0);          // dining left
-box(0.2, WH, 12, WALL, 8, WH / 2, 0);           // dining right
-box(1, WH, 0.2, WALL, -7.5, WH / 2, 6);         // front, left of door
-box(13, WH, 0.2, WALL, 1.5, WH / 2, 6);         // front, right of door
-box(2, 1, 0.2, WALL, -6, WH - 0.5, 6, false);   // above door
+const plaster = (w, h, d) => brickMats(w, h, d, 2.4, 'plaster');
+box(0.2, WH, 12, plaster(0.2, WH, 12), -8, WH / 2, 0);   // dining left
+box(0.2, WH, 12, plaster(0.2, WH, 12), 8, WH / 2, 0);    // dining right
+box(1, WH, 0.2, plaster(1, WH, 0.2), -7.5, WH / 2, 6);   // front, left of door
+box(13, WH, 0.2, plaster(13, WH, 0.2), 1.5, WH / 2, 6);  // front, right of door
+box(2, 1, 0.2, plaster(2, 1, 0.2), -6, WH - 0.5, 6, false); // above door
 colliders.push({ minX: -7, maxX: -5, minZ: 5.9, maxZ: 6.1, on: true }); // the player stays inside; guests use the door
-box(0.2, WH, 6, WALL, -8, WH / 2, -9);          // back of house
-box(16.2, WH, 0.2, WALL, 0, WH / 2, -12);
-box(0.2, WH, 1.6, WALL, 8, WH / 2, -11.2);      // east wall, back door at z -10.4..-9
-box(0.2, WH, 3, WALL, 8, WH / 2, -7.5);
-box(0.2, 1.1, 1.4, WALL, 8, WH - 0.55, -9.7, false);
+box(0.2, WH, 6, brickMats(0.2, WH, 6), -8, WH / 2, -9);          // back of house: brick kitchen walls
+box(16.2, WH, 0.2, brickMats(16.2, WH, 0.2), 0, WH / 2, -12);
+box(0.2, WH, 1.6, brickMats(0.2, WH, 1.6), 8, WH / 2, -11.2);      // east wall, back door at z -10.4..-9
+box(0.2, WH, 3, brickMats(0.2, WH, 3), 8, WH / 2, -7.5);
+box(0.2, 1.1, 1.4, brickMats(0.2, 1.1, 1.4), 8, WH - 0.55, -9.7, false);
 box(2, WH, 0.2, WALL, -7, WH / 2, -8.8);        // office, door at x -6..-4.8
 box(0.4, WH, 0.2, WALL, -4.6, WH / 2, -8.8);
 box(1.2, 1.1, 0.2, WALL, -5.4, WH - 0.55, -8.8, false);
@@ -319,7 +344,7 @@ for (let i = 0; i < 5; i++) flat(0.12, 0.9, stripe, 9.4 + i * 0.85, -7.15, 0.004
 box(0.1, 2.3, 0.1, 0x555555, 13.6, 1.15, -9.5, false); // post for the DELIVERY sign
 
 // Counter
-const counter = box(3, 1, 0.8, 0x7a4a25, -4.5, 0.5, -3.5);
+const counter = box(3, 1, 0.8, brickMats(3, 1, 0.8, 1, 'counter_wood'), -4.5, 0.5, -3.5);
 box(3.1, 0.06, 0.9, 0x3a2a1a, -4.5, 1.03, -3.5, false);
 counter.userData.kind = 'counter';
 // order screens (counter POS + kitchen display) share one canvas, drawn by drawScreens()
@@ -361,10 +386,12 @@ function part(geo, material, x, y, z, parent = scene) {
   return m;
 }
 const rod = (r, len) => new THREE.CylinderGeometry(r, r, len, 6);
+const grillDeco = new THREE.Group(); // procedural grate, crank and brasero until the parrilla model is in
+scene.add(grillDeco);
 const grateBar = rod(0.012, 0.84).rotateX(Math.PI / 2);
-for (let i = 0; i < 15; i++) part(grateBar, iron, 3.1 + i * 0.2, 0.935, -5.3);
-for (const z of [-4.88, -5.72]) part(new THREE.BoxGeometry(2.9, 0.05, 0.04), iron, 4.5, 0.94, z); // frame
-for (const x of [3.05, 5.95]) part(new THREE.BoxGeometry(0.04, 0.05, 0.86), iron, x, 0.94, -5.3);
+for (let i = 0; i < 15; i++) part(grateBar, iron, 3.1 + i * 0.2, 0.935, -5.3, grillDeco);
+for (const z of [-4.88, -5.72]) part(new THREE.BoxGeometry(2.9, 0.05, 0.04), iron, 4.5, 0.94, z, grillDeco); // frame
+for (const x of [3.05, 5.95]) part(new THREE.BoxGeometry(0.04, 0.05, 0.86), iron, x, 0.94, -5.3, grillDeco);
 // height crank on the front
 const crank = new THREE.Group();
 crank.position.set(3.14, 0.62, -4.82);
@@ -372,21 +399,21 @@ part(new THREE.TorusGeometry(0.11, 0.014, 6, 14), iron, 0, 0, 0, crank);
 part(new THREE.BoxGeometry(0.22, 0.02, 0.02), iron, 0, 0, 0, crank);
 part(new THREE.BoxGeometry(0.02, 0.22, 0.02), iron, 0, 0, 0, crank);
 part(rod(0.015, 0.1).rotateX(Math.PI / 2), iron, 0.08, 0.08, 0.05, crank);
-scene.add(crank);
+grillDeco.add(crank);
 // side brasero: brick pedestal + iron basket with burning logs
-box(0.7, 0.9, 0.9, brickMats(0.7, 0.9, 0.9), 6.4, 0.45, -5.3);
-part(new THREE.PlaneGeometry(0.6, 0.6), emberMat, 6.4, 0.905, -5.3).rotation.x = -Math.PI / 2;
+const brasero = box(0.7, 0.9, 0.9, brickMats(0.7, 0.9, 0.9), 6.4, 0.45, -5.3);
+part(new THREE.PlaneGeometry(0.6, 0.6), emberMat, 6.4, 0.905, -5.3, grillDeco).rotation.x = -Math.PI / 2;
 const cageBar = rod(0.01, 0.45);
 for (let i = 0; i < 5; i++) {
   const o = -0.25 + i * 0.125;
-  for (const [dx, dz] of [[o, -0.25], [o, 0.25], [-0.25, o], [0.25, o]]) part(cageBar, iron, 6.4 + dx, 1.13, -5.3 + dz);
+  for (const [dx, dz] of [[o, -0.25], [o, 0.25], [-0.25, o], [0.25, o]]) part(cageBar, iron, 6.4 + dx, 1.13, -5.3 + dz, grillDeco);
 }
 for (const y of [0.92, 1.35]) {
-  for (const dz of [-0.25, 0.25]) part(new THREE.BoxGeometry(0.52, 0.02, 0.02), iron, 6.4, y, -5.3 + dz);
-  for (const dx of [-0.25, 0.25]) part(new THREE.BoxGeometry(0.02, 0.02, 0.52), iron, 6.4 + dx, y, -5.3);
+  for (const dz of [-0.25, 0.25]) part(new THREE.BoxGeometry(0.52, 0.02, 0.02), iron, 6.4, y, -5.3 + dz, grillDeco);
+  for (const dx of [-0.25, 0.25]) part(new THREE.BoxGeometry(0.02, 0.02, 0.52), iron, 6.4 + dx, y, -5.3, grillDeco);
 }
 const logGeo = rod(0.045, 0.42).rotateZ(Math.PI / 2);
-for (const [y, dz, ry] of [[0.96, 0.1, 0.4], [0.96, -0.1, -0.3], [1.04, 0, 1.4]]) part(logGeo, mat(0x5a3b22), 6.4, y, -5.3 + dz).rotation.y = ry;
+for (const [y, dz, ry] of [[0.96, 0.1, 0.4], [0.96, -0.1, -0.3], [1.04, 0, 1.4]]) part(logGeo, mat(0x5a3b22), 6.4, y, -5.3 + dz, grillDeco).rotation.y = ry;
 const flames = [[0, 0, 0.34, 0xff8a1a], [0.1, 0.06, 0.22, 0xff6a10], [-0.09, -0.05, 0.26, 0xff8a1a], [0, 0, 0.18, 0xffd23a]].map(([dx, dz, h, c]) => {
   const f = part(new THREE.ConeGeometry(0.07, h, 6).translate(0, h / 2, 0), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.85 }), 6.4 + dx, 1.02, -5.3 + dz);
   f.castShadow = false;
@@ -405,6 +432,15 @@ const grillSpeed = () => (has('grillq') ? 1.35 : 1);
 // one lamp per spot on the brick front (the upper lamp is the back row): yellow cooking, green ready, flashing red before it burns
 const slotLights = SLOTS.map(([x, z]) => part(new THREE.BoxGeometry(0.15, 0.05, 0.02), new THREE.MeshBasicMaterial({ color: 0x333333 }), x, z < -5.3 ? 0.82 : 0.73, -4.84));
 slotLights.forEach((l, i) => { l.visible = i < slotCount(); });
+onProp('parrilla', L => { // the Higgsfield parrilla: its grate spans x 3.2..5.8 (every spot) with the bars at 0.94, the basket at the old brasero
+  grillDeco.visible = false;
+  grill.material = brasero.material = coals.material = hitMat; // still the collider and the interaction target
+  const m = makeProp(L);
+  m.position.set(4.644, 0, -5.29);
+  scene.add(m);
+  slotLights.forEach((l, i) => { l.position.set(SLOTS[i][0], SLOTS[i][1] < -5.3 ? 0.855 : 0.805, -4.672); l.scale.y = 0.7; }); // on its front lip
+  flames.forEach(f => { f.position.x -= 0.27; f.position.y = 0.86; f.position.z -= 0.23; }); // in its fire basket
+});
 
 // Tables
 const clothTex = (() => {
@@ -420,6 +456,7 @@ const clothTex = (() => {
   return t;
 })();
 const clothMat = new THREE.MeshStandardMaterial({ map: clothTex, roughness: 0.95 });
+const tableCloth = texMat('tablecloth', 2, 2);
 const plateGeo = new THREE.CylinderGeometry(0.15, 0.12, 0.012, 16), plateMat = mat(0xf4f4f0);
 // 4 seats per table; guests face the table. Each seat knows its spot, facing, approach lane and plate spot.
 const SEATS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
@@ -429,8 +466,8 @@ const tables = [
 ].map((t, i) => {
   const g = new THREE.Group();
   g.position.set(t.x, 0, t.z);
-  part(new THREE.BoxGeometry(1.2, 0.08, 1.2), clothMat, 0, 0.75, 0, g);
-  part(new THREE.BoxGeometry(0.15, 0.75, 0.15), tableWood, 0, 0.37, 0, g);
+  const top = part(new THREE.BoxGeometry(1.2, 0.08, 1.2), clothMat, 0, 0.75, 0, g);
+  const leg = part(new THREE.BoxGeometry(0.15, 0.75, 0.15), tableWood, 0, 0.37, 0, g);
   const seats = SEATS.map(([dx, dz]) => {
     const rot = Math.atan2(-dx, -dz), ch = new THREE.Group();
     ch.position.set(dx, 0, dz);
@@ -442,7 +479,7 @@ const tables = [
     part(plateGeo, plateMat, dx * 0.3, 0.797, dz * 0.3, g);
     const lane = dx ? t.x + dx * LANE_OFF : t.x - LANE_OFF; // guests walk in beside the table, never through it
     return { pos: new THREE.Vector3(t.x + dx, 0, t.z + dz), rot, lane: new THREE.Vector3(lane, 0, t.z + dz),
-      plate: new THREE.Vector3(t.x + dx * 0.3, 0.82, t.z + dz * 0.3), side: new THREE.Vector3(-dz, 0, dx) };
+      plate: new THREE.Vector3(t.x + dx * 0.3, 0.82, t.z + dz * 0.3), side: new THREE.Vector3(-dz, 0, dx), chair: ch };
   });
   g.traverse(o => { o.castShadow = o.receiveShadow = true; });
   const num = new THREE.MeshStandardMaterial({ map: labelTex(String(i + 1), '#f4efe6', '#7a1f1f', 1), roughness: 0.9 });
@@ -451,11 +488,22 @@ const tables = [
   scene.add(g);
   const col = { minX: t.x - 0.6, maxX: t.x + 0.6, minZ: t.z - 0.6, maxZ: t.z + 0.6, on: i < 3 };
   colliders.push(col);
-  const table = { n: i + 1, x: t.x, z: t.z, group: g, col, customer: null, active: i < 3, seats };
+  const table = { n: i + 1, x: t.x, z: t.z, group: g, col, customer: null, active: i < 3, seats, top, leg };
   g.userData.ref = table;
   g.visible = table.active;
   return table;
 });
+onProp('table', L => tables.forEach(t => { // Higgsfield table (top at 0.79) under a thin checked tablecloth
+  t.top.visible = t.leg.visible = false;
+  t.group.add(makeProp(L));
+  part(new THREE.BoxGeometry(1.22, 0.006, 1.17), tableCloth, 0, 0.7946, 0, t.group).receiveShadow = true;
+}));
+onProp('chair', L => tables.forEach(t => t.seats.forEach(s => { // bentwood chair, seat at SEAT_TOP, set back so its backrest clears a seated guest
+  s.chair.children.forEach(m => { m.visible = false; });
+  const m = makeProp(L);
+  m.position.z = -0.06;
+  s.chair.add(m);
+})));
 
 // ---------- Food ----------
 // Low-poly food: each model is ONE merged geometry (details via vertex colors), so the cooking tint on its single material still works.
@@ -696,6 +744,35 @@ for (const [type, k] of Object.entries(CHARS)) {
     gl.scene.traverse(o => { if (o.isMesh) mesh = o; });
     charLib[type] = prepChar(mesh, k);
   }));
+}
+for (const [name, k] of Object.entries(PROPS)) {
+  fetch(`models/${k.file}`).then(r => r.arrayBuffer()).then(b => gltfLoader.parse(glbBytes(b), '', gl => {
+    let mesh;
+    gl.scene.traverse(o => { if (o.isMesh) mesh = o; });
+    propLib[name] = prepProp(mesh, k);
+    (propWait[name] || []).forEach(place => place(propLib[name]));
+  }));
+}
+function prepProp(mesh, k) { // optional stretch of a middle section along model z, turn, scale, bottom centre at the origin
+  const g = mesh.geometry.clone(), p = g.attributes.position, n = g.attributes.normal;
+  if (k.stretch) {
+    const [a, b, f] = k.stretch;
+    for (let i = 0; i < p.count; i++) {
+      const z = p.getZ(i);
+      p.setZ(i, z <= a ? z : z <= b ? a + (z - a) * f : z + (b - a) * (f - 1));
+      if (z > a && z <= b) { // stretching along z flattens the normals' z part
+        const nx = n.getX(i), ny = n.getY(i), nz = n.getZ(i) / f, l = Math.hypot(nx, ny, nz) || 1;
+        n.setXYZ(i, nx / l, ny / l, nz / l);
+      }
+    }
+  }
+  g.rotateY(k.rot);
+  g.scale(k.scale, k.scale, k.scale);
+  g.computeBoundingBox();
+  const bb = g.boundingBox;
+  g.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+  g.computeBoundingSphere();
+  return { geo: g, mat: mesh.material };
 }
 function prepChar(mesh, k) { // arms a little closer to the body, CHAR_H tall with the feet at 0, facing +z, legs split off
   const g = mesh.geometry.clone(), p = g.attributes.position;
@@ -1219,6 +1296,7 @@ colliders.push(freezerCol);
 
 // prep station: cutting board between two portion trays (whole cut → portions)
 const prepTable = box(2, 0.9, 0.7, steel, 4.2, 0.45, -6.55);
+part(new THREE.PlaneGeometry(3, 1.35), texMat('kitchen_tiles', 3 / 1.35, 1), 4.2, 1.575, -6.102).rotation.y = Math.PI; // tiled wall behind the prep station
 prepTable.userData.kind = 'prep';
 const board = part(new THREE.BoxGeometry(0.55, 0.03, 0.38), mat(0xc49a6c), 4.2, 0.915, -6.6);
 board.userData.kind = 'prep';
@@ -1280,16 +1358,15 @@ scene.add(monitor);
 const decor = new THREE.Group();
 decor.visible = false;
 scene.add(decor);
-const leaf = new THREE.MeshStandardMaterial({ color: 0x3f7a3a, roughness: 0.9, flatShading: true });
-for (const [x, z] of [[-7.4, 5.3], [7.4, 5.3], [7.35, -1.9], [-2.4, -5.5]]) {
-  part(new THREE.CylinderGeometry(0.22, 0.16, 0.4, 8), mat(0xa0522d), x, 0.2, z, decor);
-  part(new THREE.IcosahedronGeometry(0.4, 0), leaf, x, 0.8, z, decor);
-}
-for (const t of tables) {
-  part(rod(0.008, 1.1), iron, t.x, 2.95, t.z, decor);
-  part(new THREE.ConeGeometry(0.28, 0.24, 10, 1, true), new THREE.MeshStandardMaterial({ color: 0x1f4d3a, side: THREE.DoubleSide }), t.x, 2.3, t.z, decor);
-  part(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffe2a0 }), t.x, 2.22, t.z, decor);
-}
+onProp('plant', L => { // two more plants (the dining corners always have theirs, see the interior)
+  for (const [x, z] of [[7.35, -1.9], [-2.4, -5.5]]) {
+    const m = makeProp(L);
+    m.position.set(x, 0, z);
+    m.scale.setScalar(0.75);
+    m.rotation.y = Math.PI / 2;
+    decor.add(m);
+  }
+});
 for (const [x, ry] of [[-7.88, Math.PI / 2], [7.88, -Math.PI / 2]]) {
   const p = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.85), new THREE.MeshBasicMaterial({ map: labelTex('ASADO\ndesde 1987', '#5a2a1a', '#f4e4c8', 1.3 / 0.85) }));
   p.position.set(x, 1.9, 1.5);
@@ -1300,8 +1377,8 @@ for (const [x, ry] of [[-7.88, Math.PI / 2], [7.88, -Math.PI / 2]]) {
 // ---------- Service counter, sauce station, interior ----------
 // The pass: one numbered tray per table on the service counter between the grill and the dining room
 const PASS_Z = -3.4, PASS_Y = 1.05;
-const counterWood = mat(0x7a4a25), capWood = mat(0x3a2a1a);
-const pass = box(5.3, 1, 0.5, counterWood, 5.25, 0.5, PASS_Z);
+const capWood = mat(0x3a2a1a);
+const pass = box(5.3, 1, 0.5, brickMats(5.3, 1, 0.5, 1, 'counter_wood'), 5.25, 0.5, PASS_Z);
 pass.userData.kind = 'pass';
 box(5.36, 0.05, 0.62, steel, 5.25, 1.025, PASS_Z, false);
 for (const x of [2.7, 7.8]) box(0.05, 0.85, 0.05, iron, x, 1.475, PASS_Z, false); // heat-lamp gantry
@@ -1313,7 +1390,7 @@ for (const x of [3.5, 5.25, 7]) {
 plaque('SERVICE', 1, 0.24, 4.1, 2.09, PASS_Z, 0, '#2a1a10', '#ffd76a', true);
 // low dividers close the staff side off from the dining room (staff gap at x 0.55..1.85)
 for (const [w, x] of [[3.55, -1.225], [0.75, 2.225]]) {
-  box(w, 1.05, 0.12, counterWood, x, 0.525, PASS_Z);
+  box(w, 1.05, 0.12, brickMats(w, 1.05, 0.12, 1, 'counter_wood'), x, 0.525, PASS_Z);
   box(w + 0.06, 0.05, 0.2, capWood, x, 1.075, PASS_Z, false);
 }
 // table trays: dishes (each gets a plate) and sauce cups collect per table; a complete tray is READY and goes out in one trip
@@ -1478,31 +1555,35 @@ function startPour(s) { // fill a cup from the station bottle; the view locks on
   sfx.pour();
 }
 
-// menu chalkboard behind the front counter
+// filete menu board behind the front counter: the painted board with today's prices chalked in;
+// a dish that isn't on today's menu is wiped off the board
 const menuCanvas = document.createElement('canvas');
-menuCanvas.width = 1024;
-menuCanvas.height = 576;
+menuCanvas.width = 765;
+menuCanvas.height = 1024;
 const menuTex = new THREE.CanvasTexture(menuCanvas);
 menuTex.colorSpace = THREE.SRGBColorSpace;
-box(2, 1.17, 0.05, wood, -4.6, 2.35, -5.875, false);
-part(new THREE.PlaneGeometry(1.9, 1.07), new THREE.MeshBasicMaterial({ map: menuTex }), -4.6, 2.35, -5.849).castShadow = false;
+box(1.21, 1.6, 0.05, wood, -4.6, 1.95, -5.875, false);
+part(new THREE.PlaneGeometry(1.15, 1.54), new THREE.MeshBasicMaterial({ map: menuTex }), -4.6, 1.95, -5.849).castShadow = false;
+const menuArt = new Image();
+menuArt.crossOrigin = 'anonymous';
+menuArt.onload = () => drawMenu();
+menuArt.src = 'textures/menu_board.jpg';
+// [line centre y, end of the painted name x] in the 896×1200 painting
+const MENU_ROWS = { filet: [395, 526], vacio: [494, 542], bife: [590, 710], chorizo: [688, 580], provoleta: [784, 615], chimi: [954, 590], criolla: [1022, 600] };
 function drawMenu() { // dishes and sauces at today's prices
-  const g = menuCanvas.getContext('2d');
-  g.fillStyle = '#1d2a22'; g.fillRect(0, 0, 1024, 576);
-  g.strokeStyle = '#c9b48a'; g.lineWidth = 6; g.strokeRect(14, 14, 996, 548);
-  g.textBaseline = 'middle'; g.fillStyle = '#f3ead8';
-  g.font = 'bold 66px Georgia, serif'; g.textAlign = 'center'; g.fillText('PARRILLA · MENÚ', 512, 70);
-  menu().forEach((d, i) => {
-    g.font = '44px Georgia, serif';
-    g.textAlign = 'left'; g.fillText(FOODS[d].name, 60, 160 + i * 66);
-    g.textAlign = 'right'; g.fillText(`$${FOODS[d].price}`, 610, 160 + i * 66);
-  });
-  g.fillStyle = '#e7c76a'; g.font = 'bold 44px Georgia, serif'; g.textAlign = 'left'; g.fillText('SALSAS', 680, 160);
-  g.fillStyle = '#f3ead8'; g.font = '36px Georgia, serif';
-  Object.values(SAUCES).forEach((x, i) => g.fillText(`${x.name}  $${x.price}`, 680, 226 + i * 58));
+  if (!menuArt.naturalWidth) return;
+  const g = menuCanvas.getContext('2d'), on = menu();
+  g.setTransform(765 / 896, 0, 0, 1024 / 1200, 0, 0);
+  g.drawImage(menuArt, 0, 0, 896, 1200);
+  g.textBaseline = 'middle'; g.textAlign = 'left';
+  for (const [k, [y, x]] of Object.entries(MENU_ROWS)) {
+    if (FOODS[k] && !on.includes(k)) { g.fillStyle = '#1d1e1e'; g.fillRect(140, y - 38, 620, 76); continue; }
+    g.fillStyle = '#f2dc8c'; g.font = `bold ${SAUCES[k] ? 30 : 34}px Georgia, serif`;
+    g.fillText(`$${(FOODS[k] || SAUCES[k]).price}`, x + 14, y + 2);
+  }
   if (lvl('quality')) {
-    g.fillStyle = '#e7c76a'; g.font = 'italic 32px Georgia, serif'; g.textAlign = 'center';
-    g.fillText(`${QUALITY.slice(1, lvl('quality') + 1).map(q => q.name).join(', ')} cuts are priced higher`, 512, 528);
+    g.fillStyle = '#f2dc8c'; g.font = 'italic 24px Georgia, serif'; g.textAlign = 'center';
+    g.fillText(`${QUALITY.slice(1, lvl('quality') + 1).map(q => q.name).join(', ')} cuts are priced higher`, 448, 841);
   }
   menuTex.needsUpdate = true;
 }
@@ -1514,14 +1595,34 @@ for (const y of [1.25, 1.75]) box(1, 0.04, 0.28, wood, -7.3, y, -5.76, false);
 for (let i = 0; i < 12; i++) part(wineGeo, wines[i % 3], -7.7 + (i % 6) * 0.16, i < 6 ? 1.4 : 1.9, -5.76);
 for (const [x, z, r] of [[7.4, -5.5, 0.3], [7.45, -4.95, -0.2]]) part(new THREE.CylinderGeometry(0.2, 0.24, 0.55, 8), mat(0x5b5040), x, 0.275, z).rotation.y = r;
 
-// ceiling with wooden beams and lamps: the restaurant reads as an enclosed room
-box(16.4, 0.1, 18.4, new THREE.MeshStandardMaterial({ color: 0xe6dccb, roughness: 0.9, emissive: 0x2e281f }), 0, WH + 0.05, -3, false).castShadow = false;
-const beamWood = mat(0x4a2e18), lampMat = new THREE.MeshBasicMaterial({ color: 0xfff1d6 });
+// closed wooden plank ceiling with beams over the whole building: the restaurant reads as an enclosed room
+const ceilWood = texMat('wood', 16.4 / 1.4, 18.4 / 1.4);
+ceilWood.emissiveMap = ceilWood.map;
+ceilWood.emissive.setHex(0x4a4038); // the planks never go black in the corners
+box(16.4, 0.1, 18.4, ceilWood, 0, WH + 0.05, -3, false).castShadow = false;
+const beamWood = brickMats(16, 0.2, 0.16, 1.4, 'wood'), lampMat = new THREE.MeshBasicMaterial({ color: 0xfff1d6 });
+beamWood.forEach(m => m.color.setHex(0x9a7860));
 for (const z of [-4.4, -1.4, 1.6, 4.6]) box(16, 0.2, 0.16, beamWood, 0, WH - 0.1, z, false).castShadow = false;
-for (const [x, z] of [[-2, 0.5], [4, 2.2], [-4.6, -4.6]]) part(new THREE.CylinderGeometry(0.22, 0.22, 0.05, 14), lampMat, x, WH - 0.03, z).castShadow = false;
-const diningLight = new THREE.PointLight(0xffd8a8, 8, 13); // one warm light for the room keeps software rendering fast
-diningLight.position.set(0.5, WH - 0.4, 0);
-scene.add(diningLight);
+part(new THREE.CylinderGeometry(0.22, 0.22, 0.05, 14), lampMat, -4.6, WH - 0.03, -4.6).castShadow = false; // over the staff side of the counter
+// pendant lamps over the tables: dark green enamel domes on black cords, one warm light each (4 at most, no shadows);
+// table 4's lamp comes with the table
+const enamel = new THREE.MeshStandardMaterial({ color: 0x1d4a30, roughness: 0.35, metalness: 0.25, side: THREE.DoubleSide });
+const cordMat = mat(0x111111), bulbMat = new THREE.MeshBasicMaterial({ color: 0xffe2a8 });
+const domeGeo = new THREE.SphereGeometry(0.26, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.2), cordGeo = rod(0.008, WH - 2.6);
+for (const t of tables) {
+  const g = new THREE.Group();
+  g.position.set(t.x, 0, t.z);
+  part(cordGeo, cordMat, 0, (WH + 2.6) / 2, 0, g);
+  part(domeGeo, enamel, 0, 2.34, 0, g);
+  part(new THREE.SphereGeometry(0.06, 10, 8), bulbMat, 0, 2.4, 0, g);
+  g.traverse(o => { o.castShadow = false; });
+  const light = new THREE.PointLight(0xffc98a, 3.5, 7);
+  light.position.y = 2.36;
+  g.add(light);
+  g.visible = t.active;
+  t.lamp = g;
+  scene.add(g);
+}
 // windows (bright glass in wooden frames) and wainscoting around the dining room
 const glass = new THREE.MeshBasicMaterial({ color: 0xcfe6f2 });
 function windowAt(x, z, ry) {
@@ -1543,6 +1644,51 @@ for (const [w, d, x, z] of [[0.03, 11.8, -7.885, 0], [0.03, 11.8, 7.885, 0], [12
   box(w, 1, d, wainscot, x, 0.5, z, false).castShadow = false;
   box(w + 0.04, 0.04, d + 0.04, capWood, x, 1.02, z, false);
 }
+// pictures on flat planes: the filete logo above the entrance and on a sign hung over the front counter, two posters
+function picture(name, w, h, x, y, z, ry) {
+  const g = new THREE.Group(), m = texMat(name);
+  m.emissiveMap = m.map;
+  m.emissive.setHex(0x3a3a3a); // readable in the dim corners
+  g.position.set(x, y, z);
+  g.rotation.y = ry;
+  part(new THREE.BoxGeometry(w + 0.05, h + 0.05, 0.03), wood, 0, 0, -0.016, g);
+  part(new THREE.PlaneGeometry(w, h), m, 0, 0, 0, g);
+  g.traverse(o => { o.castShadow = false; });
+  scene.add(g);
+  return g;
+}
+picture('logo', 1.4, 0.782, -6, 2.97, 5.885, Math.PI);
+picture('logo', 1.2, 0.67, -4.6, 2.935, -4.25, 0);
+for (const dx of [-0.5, 0.5]) part(rod(0.006, 0.23), cordMat, -4.6 + dx, WH - 0.115, -4.25).castShadow = false;
+picture('poster_tango', 0.66, 0.88, -7.885, 1.95, -0.4, Math.PI / 2);
+picture('poster_futbol', 0.66, 0.88, 2.3, 1.95, 5.885, Math.PI);
+// light blue and white pennant garland strung above the front counter
+const garland = new THREE.CatmullRomCurve3(Array.from({ length: 21 }, (_, i) => new THREE.Vector3(-6.6 + i * 0.2, 3.4 - 0.32 * Math.sin(Math.PI * i / 20), -3.25)));
+part(new THREE.TubeGeometry(garland, 40, 0.006, 4), cordMat, 0, 0, 0).castShadow = false;
+const flagPos = [], flagCol = [], celeste = new THREE.Color(0x75aadb), white = new THREE.Color(0xf4f4f0);
+for (let i = 0; i < 22; i++) {
+  const q = garland.getPointAt((i + 0.5) / 22), c = i % 2 ? white : celeste;
+  flagPos.push(q.x - 0.07, q.y, -3.25, q.x + 0.07, q.y, -3.25, q.x, q.y - 0.17, -3.25);
+  for (let k = 0; k < 3; k++) flagCol.push(c.r, c.g, c.b);
+}
+const flagGeo = new THREE.BufferGeometry();
+flagGeo.setAttribute('position', new THREE.Float32BufferAttribute(flagPos, 3));
+flagGeo.setAttribute('color', new THREE.Float32BufferAttribute(flagCol, 3));
+flagGeo.computeVertexNormals();
+part(flagGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide }), 0, 0, 0).castShadow = false;
+// props off every walking path, station and interaction ray: plants in the dining corners and on the left wall,
+// the wine rack between the right wall's picture and window, the plate shelf high on the wall behind the counter
+onProp('plant', L => {
+  for (const [x, z, k, r] of [[7.35, 5.35, 1, 0], [-7.6, 5.45, 0.85, Math.PI], [-7.45, 1.8, 1, 0]]) {
+    const m = makeProp(L);
+    m.position.set(x, 0, z);
+    m.scale.setScalar(k);
+    m.rotation.y = r;
+    scene.add(m);
+  }
+});
+onProp('winerack', L => { const m = makeProp(L); m.position.set(7.785, 1.15, 2.9); scene.add(m); });
+onProp('plates', L => { const m = makeProp(L); m.position.set(-3, 1.7, -5.729); scene.add(m); });
 
 // delivery crates (free starter crates wait in the yard on day 1)
 function makeCrate(item, qs, starter) {
@@ -1988,7 +2134,7 @@ function buyUpgrade(u) {
   today.upgrades += cost;
   u.level++;
   if (u.id === 'tables') {
-    tables[3].active = tables[3].col.on = tables[3].group.visible = true;
+    tables[3].active = tables[3].col.on = tables[3].group.visible = tables[3].lamp.visible = true;
     passTrays[3].group.visible = true; // its tray on the pass
     passTrays[3].labels.forEach(l => { l.visible = true; });
   }
@@ -2054,17 +2200,24 @@ posTex.colorSpace = THREE.SRGBColorSpace;
 const posMon = new THREE.Group();
 posMon.position.set(-5.6, 1.4, -3.62);
 posMon.rotation.y = Math.PI; // the screen faces the staff side of the counter
-part(new THREE.BoxGeometry(POS_W + 0.04, POS_H + 0.04, 0.04), dark, 0, 0, -0.022, posMon);
+const posBezel = part(new THREE.BoxGeometry(POS_W + 0.04, POS_H + 0.04, 0.04), dark, 0, 0, -0.022, posMon);
 const posScreen = part(new THREE.PlaneGeometry(POS_W, POS_H), new THREE.MeshBasicMaterial({ map: posTex }), 0, 0, 0, posMon);
 posScreen.castShadow = false;
-part(new THREE.BoxGeometry(0.05, 0.2, 0.05), dark, 0, -0.27, -0.03, posMon);
+const posStand = part(new THREE.BoxGeometry(0.05, 0.2, 0.05), dark, 0, -0.27, -0.03, posMon);
 const posCursor = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape([V2(0, 0), V2(0, -0.024), V2(0.0065, -0.018), V2(0.012, -0.028), V2(0.016, -0.026), V2(0.0105, -0.016), V2(0.018, -0.016)])), new THREE.MeshBasicMaterial({ color: 0xffffff }));
 posCursor.visible = false;
 posMon.add(posCursor);
 posMon.userData.kind = 'register';
 scene.add(posMon);
-part(new THREE.BoxGeometry(0.36, 0.02, 0.12), dark, -5.6, 1.07, -3.8);   // keyboard
-part(new THREE.BoxGeometry(0.045, 0.02, 0.07), dark, -5.3, 1.07, -3.8);  // mouse
+const posKeys = [part(new THREE.BoxGeometry(0.36, 0.02, 0.12), dark, -5.6, 1.07, -3.8),   // keyboard
+  part(new THREE.BoxGeometry(0.045, 0.02, 0.07), dark, -5.3, 1.07, -3.8)];                  // mouse
+onProp('pos', L => { // the Higgsfield register on the counter: the interactive screen sits on its monitor's glass
+  [posBezel, posStand, ...posKeys].forEach(m => { m.visible = false; });
+  const m = makeProp(L);
+  m.position.set(0.017, -0.56, -0.1105);
+  posMon.add(m);
+  posMon.position.y = 1.62; // the model stands on the counter top (1.06)
+});
 const cashDrawer = part(new THREE.BoxGeometry(0.44, 0.09, 0.3), mat(0x3a3f45), -5.6, 0.94, -3.755);
 const readerCanvas = document.createElement('canvas');
 readerCanvas.width = 256;
@@ -2162,7 +2315,7 @@ function updatePOS(dt, playing) {
   if (uiMode !== 'pos') return;
   const k = Math.min(1, dt * 6), p = camera.position; // step up to the screen
   p.lerp(POS_VIEW, k);
-  const ty = Math.atan2(p.x + 5.6, p.z + 3.62), tp = Math.atan2(1.4 - p.y, Math.hypot(p.x + 5.6, p.z + 3.62));
+  const ty = Math.atan2(p.x + 5.6, p.z + 3.62), tp = Math.atan2(posMon.position.y - p.y, Math.hypot(p.x + 5.6, p.z + 3.62));
   yaw += Math.atan2(Math.sin(ty - yaw), Math.cos(ty - yaw)) * k;
   pitch += (tp - pitch) * k;
   camera.rotation.set(pitch, yaw, 0);
@@ -2686,7 +2839,7 @@ frame();
 // debug/test hook
 window.__game = {
   camera, customers, queue, payQueue, grillFood, tables, stock, trays, crates, bins, trayObjs, UPGRADES, ROLES, history, staff, transactions, pos,
-  scene, charLib, CHARS, CHAR_H, SEAT_TOP, passTrays, holders, sauceLevel, slotLights, SLOTS, SAUCES, DAYS, ITEMS, PATIENCE, sauceAvail, slotCount, tipFactor, foodState, grillNeed,
+  scene, charLib, CHARS, CHAR_H, SEAT_TOP, propLib, PROPS, passTrays, holders, sauceLevel, slotLights, SLOTS, SAUCES, DAYS, ITEMS, PATIENCE, sauceAvail, slotCount, tipFactor, foodState, grillNeed,
   sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate, bottle: handBottle, cup: handCup, stream, slot: holdSlot }, MOOD,
   get money() { return money; }, set money(v) { money = v; }, get drawer() { return drawer; }, get held() { return held; }, get action() { return currentAction; },
   get day() { return day; }, set day(v) { day = v; }, get isOpen() { return isOpen; }, get clockMin() { return clockMin; }, set clockMin(v) { clockMin = v; },

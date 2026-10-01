@@ -1,8 +1,12 @@
 # Asado Tycoon — development status
 
-Higgsfield version, block 1: guests and staff are Higgsfield 3D models. The rest is still procedural
-low-poly, with canvas-texture signs and screens. The frozen pre-Higgsfield version is commit 172ceab.
-Last updated with the "Higgsfield block 1: 3D characters" phase.
+Higgsfield version, blocks 1–2:
+- Guests, staff and the main interior props are Higgsfield 3D models.
+- Floors, walls, counters, ceiling and tablecloths use Higgsfield textures.
+- The menu board, logo signs and posters are Higgsfield pictures.
+
+The rest is still procedural low-poly, with canvas-texture signs and screens. The frozen pre-Higgsfield version
+is commit 172ceab. Last updated with the "Higgsfield block 2: interior" phase.
 
 ## Playable loop
 
@@ -32,11 +36,12 @@ Last updated with the "Higgsfield block 1: 3D characters" phase.
 | Staff | Role table with hire cost, daily wage and a state machine: Prep Cook $60/$30 (fetch → cut → return), Server $60/$25 (READY tray → table → back), Grill Cook $120/$45 (portions open orders need → free grill spots → off when ready → table trays) |
 | Sauces | Bottles bought wholesale → delivered → stored → placed at the SAUCE station → pour a cup (hands animation) → put it on the table's tray (or bring it to the table); dish + sauce both required |
 | Service counter | One numbered tray per table (tray 4 with More Tables); a tray only takes what its table still needs, gets a plate per dish, turns READY (green) when every dish and sauce is there |
-| Grill | 4 spots, Bigger Grill +2 per level up to 10 ($150/$300/$450); 20 s from ready to burnt for every dish, red flash in the last 6 s; Better Grill speeds up cooking only |
+| Grill | Higgsfield parrilla model; its grate section is stretched to cover all 10 spots, and the spot lamps sit on its front lip. 4 spots, Bigger Grill +2 per level up to 10 ($150/$300/$450); 20 s from ready to burnt for every dish, red flash in the last 6 s; Better Grill speeds up cooking only |
 | Patience | Real seconds: order queue 60 s, food wait full tip ≤60 s → none at 120 s → leaves at 150 s (+15 s per extra dish), pay line 60 s; day factor 1.0, Better Interior +30% |
 | Signs | Physical plaques: KITCHEN, STORAGE, OFFICE, PREP STATION, COLD STORAGE (capacity), PEDIDOS, CAJA, PARRILLA (on the hood), SERVICE, SAUCES, DELIVERY, table number blocks, crate lid labels, bin and tray labels |
 | Status | Grill slot lamps (yellow cooking, green ready, flashing red, dark burnt); guest mood badge below 50% / 25% patience; patience % in the table prompt |
-| Interior | Ceiling with beams and lamps (enclosed room), windows, wainscoting, menu chalkboard behind the counter, wine shelf, charcoal sacks, low dividers separating the staff side, order screens at the counter, kitchen and grill |
+| Interior | Higgsfield textures: calcáreas floor, plaster dining walls, brick grill and kitchen walls, tiled wall behind the prep station, counter wood, wooden plank ceiling and beams (closed over the whole building), gingham tablecloths. Higgsfield models: tables, bentwood chairs (seat at SEAT_TOP), the register (the interactive screen sits on its monitor), plants in the dining corners, a wine rack, a plate shelf with siphons. Pictures: the filete menu board, which shows today's prices (dishes not on today's menu are wiped off), the filete logo above the entrance and on a sign over the counter, tango and fútbol posters. Pendant lamps with a warm light over each table, a light blue and white pennant garland over the counter, warm lighting. Also windows, wainscoting, wine shelf, charcoal sacks, low dividers, order screens |
+| Better Interior | Framed pictures and two more plants (its pendant lamps are now always there) |
 | Hands | Carried things sit small in the lower right; stacks of up to 4 raw portions of one kind (E adds one, hold E for more), all ready grill pieces in one E; cutting with a knife, pouring bottle → cup |
 | Characters | Three Higgsfield guest models (gaucho grandpa, football fan, señora); the room picks the type it has least of, and a repeat gets a light tint and 0.95–1.05 size. The asador model is used for every employee, with the beret showing the role (grill cook red, server black, prep cook white). Each GLB loads once and is shared. Code-only toy animation: waddle walk, breathing and sway when standing, sitting with the legs tucked and a slight lean back |
 | Economy | Wholesale food cost, upgrades, wages, tips; end-of-day summary and history in ASADO OS finances |
@@ -63,6 +68,8 @@ found seated guests dipping into the seat; this is fixed with a seated copy of t
 crotch line. It also found timing problems in the test itself, now fixed. The test was not re-run after these
 fixes, and the server carrying a tray was not seen within the day 4 window. `playtest-pos` and
 `playtest-service` were not re-run for the characters.
+Higgsfield block 2: `npm run build` plus one load check. All models and textures loaded and there were no
+console errors. No gameplay runs, as asked.
 
 ## Known limitations
 
@@ -70,6 +77,9 @@ fixes, and the server carrying a tray was not seen within the day 4 window. `pla
 - A partly filled raw stack goes back to its bin once it is full (or the bin is empty): E on the bin adds one.
 - Guests and staff don't collide with each other or the player (they follow fixed lanes); party members can
   overlap a little in the counter queue.
+- Props are visual only: colliders and hit boxes are still the original boxes. The parrilla's middle section is
+  stretched to the 10-spot grate, so its bricks look longer. A model shows once its GLB has loaded; until then
+  the procedural stand-in shows.
 - Characters are rigid models: arms don't swing, carried things are held in front of the body, and seated
   guests' legs are tucked out of sight.
 - Speech bubbles over guests (`?`, `CARD`, `CASH $50`) are the only floating sprites, by design.

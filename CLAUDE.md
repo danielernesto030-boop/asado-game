@@ -1,11 +1,15 @@
 # Asado Tycoon — notes for Claude
 
 A first-person 3D Argentine parrilla management game. Three.js + Vite, no other runtime dependencies.
-**Higgsfield version, block 1**: guests and staff are Higgsfield 3D models (`public/models/*.glb`, fetched from
-existing jobs and compressed to 1024px JPEG textures). Everything else is still procedural low-poly geometry,
-and all signs and screens are canvas textures. The frozen pre-Higgsfield version is commit 172ceab, published at
-its own artifact link, which must never be republished. Do not generate anything with Higgsfield or any paid
-asset service unless the user asks for it.
+**Higgsfield version, blocks 1–2** (assets fetched from existing Higgsfield jobs, compressed to 1024px JPEG):
+- Guests, staff and the main interior props are 3D models (`public/models/*.glb`): parrilla, tables, chairs,
+  register, plants, wine rack and plate shelf.
+- Floors, walls, counters, ceiling and tablecloths use the textures in `public/textures`.
+- The menu board, the logo signs and the two posters are pictures.
+
+Everything else is still procedural low-poly geometry, and the remaining signs and screens are canvas textures.
+The frozen pre-Higgsfield version is commit 172ceab, published at its own artifact link, which must never be
+republished. Do not generate anything with Higgsfield or any paid asset service unless the user asks for it.
 
 ## Run
 
@@ -22,8 +26,8 @@ Everything lives in `main.js`, in this order (search for the `// ---------- Sect
 1. **Config** — the data tables that drive the game. Tune difficulty and content here first:
    `FOODS` (dishes, prices, cook/burn times), `SAUCES`, `ITEMS` (wholesale/cold storage, incl. sauce bottles),
    `QUALITY`, `DAYS` (demand per day: rate, rush, party sizes, sauces, cash share, patience), `RUSHES`,
-   `UPGRADES`, `ROLES` (staff), `CHARS` (character models). Times are written in game minutes and converted
-   with `gm()`; `TIME_SCALE` sets how fast the 12:00–22:00 shift runs (about 8 real minutes).
+   `UPGRADES`, `ROLES` (staff), `CHARS` (character models), `PROPS` (interior models). Times are written in game
+   minutes and converted with `gm()`; `TIME_SCALE` sets how fast the 12:00–22:00 shift runs (about 8 real minutes).
 2. **State** — money (bank), `drawer` (register cash, starts at the `FLOAT`), held item, queues, stock, etc.
 3. **World** — helpers (`box`, `part`, `flat`, `labelTex`, `panel`, `plaque`), then the restaurant:
    dining room, front counter + register, grill, tables, back of house (cold storage, prep station,
@@ -50,7 +54,14 @@ Conventions:
 - Timed hand actions use `busy = { kind: 'cut' | 'pour', ... }`; `updateBusy` and `updateHands` animate them.
 - No floating labels in the world: use `plaque()` for signs, lamps/mood badges for status. The only sprites
   are guests' speech bubbles and mood badges.
-- Keep the shader light count low (software rendering in tests is slow; each point light costs ~7%).
+- Textures load through `tex(name, rx, ry)`, which shares one image per file across every repeat.
+  `brickMats(w, h, d, s, name)` tiles any texture per box face (brick, plaster, counter_wood, wood).
+- Props: `PROPS` gives each model's turn (the models face +x) and scale. The model loads once with the
+  characters, prepared by `prepProp` (bottom centre at the origin; the parrilla's grate section is stretched).
+  `onProp(name, place)` swaps it in for the procedural stand-in, which stays until then. Colliders, hit boxes
+  and stations never change. Decor is never added to `solids` or the ray targets, so it can't block interaction.
+- Keep the shader light count low (software rendering in tests is slow; each point light costs ~7%). The dining
+  room has one warm point light per pendant lamp, 4 at most.
 - Prefer extending the data tables over new code paths; keep new code in the matching section.
 
 ## Testing
