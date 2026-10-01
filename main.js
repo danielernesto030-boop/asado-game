@@ -27,6 +27,8 @@ const ITEMS = {
   bife:        { name: 'Bife de Chorizo', dish: 'bife',      pack: 4, cost: 56 },
   chorizo:     { name: 'Chorizo',         dish: 'chorizo',   pack: 6, cost: 36 },
   provoleta:   { name: 'Provoleta',       dish: 'provoleta', pack: 4, cost: 32, plain: true }, // no meat quality
+  chimi_bottle:   { name: 'Chimichurri',   sauce: 'chimi',   pack: 2, cups: 10, cost: 16, plain: true }, // bottles go to the sauce station
+  criolla_bottle: { name: 'Salsa Criolla', sauce: 'criolla', pack: 2, cups: 10, cost: 14, plain: true },
 };
 const ITEM_KEYS = Object.keys(ITEMS);
 const QUALITY = [
@@ -78,7 +80,7 @@ const has = id => lvl(id) > 0;
 // Staff roles, hired through the office terminal. The player always runs the register.
 const ROLES = {
   prep: { name: 'Prep Cook', hire: 60, wage: 30, shirt: 0xffffff, hat: true, desc: 'Fetches whole cuts from cold storage and cuts them into portions' },
-  server: { name: 'Server', hire: 90, wage: 35, shirt: 0x26302b, desc: 'Carries finished plates from the service counter to the tables', soon: true },
+  server: { name: 'Server', hire: 90, wage: 35, shirt: 0x26302b, desc: 'Carries finished plates from the service counter to the tables' },
   grill: { name: 'Grill Cook', hire: 120, wage: 45, shirt: 0xffffff, hat: true, desc: 'Works the parrilla', soon: true },
 };
 const portionsPer = () => (has('prep') ? 8 : 6);
@@ -88,8 +90,8 @@ const patienceMult = () => (has('interior') ? 1.3 : 1) * dayCfg().patience;
 
 // ---------- State ----------
 let money = 0;
-let held = null;          // { kind: 'crate' | 'whole' | 'portion' | 'cooked', type, q, mesh, qs }
-const grillFood = [];     // { type, q, t, mesh, slot, bar }
+let held = null;          // { kind: 'crate' | 'whole' | 'portion' | 'cooked' | 'bottle' | 'sauce', type, q, mesh, qs, sauce }
+const grillFood = [];     // { type, q, t, mesh, slot }
 const customers = [];     // party leaders (party members follow them)
 const queue = [], payQueue = []; // ordering line at the counter, payment line at the register
 let msgTimer = 0;
@@ -99,7 +101,7 @@ const stock = Object.fromEntries(ITEM_KEYS.map(k => [k, []])); // cold storage: 
 const trays = { filet: [], vacio: [] };                          // cut portions waiting at the prep station
 const crates = [];                                               // crates standing in the delivery area
 let delivery = null;                                             // wholesale order on its way: { t, list }
-let busy = null;                                                 // a timed hands action (cutting) in progress
+let busy = null;                                                 // a timed hands action in progress: { kind: 'cut' | 'pour', ... }
 let uiMode = null, summaryTimer = 0;                             // uiMode: 'os' | 'summary' | 'pos'
 let drawer = FLOAT;                                              // cash in the register drawer
 const transactions = [];                                         // completed payments
@@ -177,40 +179,38 @@ function box(w, h, d, color, x, y, z, collide = true) {
   return m;
 }
 
-function makeLabel(text, scale = 0.5, bg = '#0009', fg = '#fff') {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 256;
+function labelTex(text, bg = '#0009', fg = '#fff', aspect = 2) { // canvas texture: centered lines of text, shrunk to fit
+  const c = document.createElement('canvas'), W = Math.round(256 * aspect);
+  c.width = W; c.height = 256;
   const g = c.getContext('2d');
-  g.fillStyle = bg; g.fillRect(0, 0, 512, 256);
+  g.fillStyle = bg; g.fillRect(0, 0, W, 256);
   g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle';
   const lines = text.split('\n');
   let size = lines.length > 2 ? 68 : lines.length > 1 ? 90 : 150;
   g.font = `bold ${size}px system-ui`;
   const widest = Math.max(...lines.map(l => g.measureText(l).width));
-  if (widest > 470) { size = Math.floor(size * 470 / widest); g.font = `bold ${size}px system-ui`; }
-  lines.forEach((l, i) => g.fillText(l, 256, 128 + (i - (lines.length - 1) / 2) * size * 1.1));
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c) }));
-  s.scale.set(scale * 2, scale, 1);
-  return s;
+  if (widest > W - 42) { size = Math.floor(size * (W - 42) / widest); g.font = `bold ${size}px system-ui`; }
+  lines.forEach((l, i) => g.fillText(l, W / 2, 128 + (i - (lines.length - 1) / 2) * size * 1.1));
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
-
-function makeBar(w = 0.6) {
-  const g = new THREE.Group();
-  const bg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.08), new THREE.MeshBasicMaterial({ color: 0x222222 }));
-  const fill = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.08), new THREE.MeshBasicMaterial({ color: 0x44dd44 }));
-  fill.position.z = 0.001;
-  g.add(bg, fill);
-  g.userData = { fill, w };
-  return g;
-}
-function setBar(bar, p, color) {
-  p = THREE.MathUtils.clamp(p, 0, 1);
-  const { fill, w } = bar.userData;
-  fill.scale.x = Math.max(p, 0.001);
-  fill.position.x = -(1 - p) * w / 2;
-  fill.material.color.setHex(color);
-  // billboard: cancel parent's rotation (customers turn), then face camera
-  bar.quaternion.copy(bar.parent.quaternion).invert().multiply(camera.quaternion);
+function bubbleTex(text) { // a guest's speech bubble: rounded box with a tail pointing down at them
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.beginPath(); g.roundRect(6, 6, 500, 186, 56); g.fill();
+  g.beginPath(); g.moveTo(222, 186); g.lineTo(256, 250); g.lineTo(290, 186); g.fill();
+  g.fillStyle = '#222'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  let size = 120;
+  g.font = `bold ${size}px system-ui`;
+  const w = g.measureText(text).width;
+  if (w > 430) { size = Math.floor(size * 430 / w); g.font = `bold ${size}px system-ui`; }
+  g.fillText(text, 256, 100);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 // ---------- Audio (tiny WebAudio placeholders) ----------
@@ -251,6 +251,7 @@ const sfx = {
   store: () => beep(150, 0.14, 'triangle', 0.2),
   truck: () => { beep(330, 0.25, 'sawtooth', 0.05); beep(262, 0.35, 'sawtooth', 0.05, 0.28); },
   ui: () => beep(1200, 0.04, 'square', 0.035),
+  pour: () => [0, 0.2, 0.4, 0.6].forEach((d, i) => beep(430 - i * 45, 0.09, 'sine', 0.08, d)),
 };
 
 // ---------- Restaurant ----------
@@ -297,28 +298,22 @@ for (const [w, d, x, z] of [[6, 0.15, 11, -13], [6, 0.15, 11, -5], [0.15, 8, 14,
 const stripe = mat(0xf2c230);
 for (const [w, d, x, z] of [[4.6, 0.1, 11, -12.25], [4.6, 0.1, 11, -6.75], [0.1, 5.6, 8.7, -9.5], [0.1, 5.6, 13.3, -9.5]]) flat(w, d, stripe, x, z, 0.004);
 for (let i = 0; i < 5; i++) flat(0.12, 0.9, stripe, 9.4 + i * 0.85, -7.15, 0.004).rotation.z = 0.7;
-box(0.1, 2.3, 0.1, 0x555555, 13.6, 1.15, -9.5, false);
-const deliverySign = makeLabel('DELIVERY', 0.45, '#f2c230', '#1a1a1a');
-deliverySign.position.set(13.6, 2.55, -9.5);
-scene.add(deliverySign);
+box(0.1, 2.3, 0.1, 0x555555, 13.6, 1.15, -9.5, false); // post for the DELIVERY sign
 
 // Counter
 const counter = box(3, 1, 0.8, 0x7a4a25, -4.5, 0.5, -3.5);
 box(3.1, 0.06, 0.9, 0x3a2a1a, -4.5, 1.03, -3.5, false);
 counter.userData.kind = 'counter';
-const counterLabel = makeLabel('PEDIDOS', 0.4);
-counterLabel.position.set(-4.5, 2.2, -3.5);
-scene.add(counterLabel);
 // order screens (counter POS + kitchen display) share one canvas, drawn by drawScreens()
 const orderCanvas = document.createElement('canvas');
 orderCanvas.width = 512;
 orderCanvas.height = 360;
 const orderTex = new THREE.CanvasTexture(orderCanvas);
 orderTex.colorSpace = THREE.SRGBColorSpace;
-function orderScreen(w, x, y, z, stand) { // faces -z, towards the staff side
+function orderScreen(w, x, y, z, stand, ry = Math.PI) { // faces -z (the staff side) unless turned
   const g = new THREE.Group();
   g.position.set(x, y, z);
-  g.rotation.y = Math.PI;
+  g.rotation.y = ry;
   part(new THREE.BoxGeometry(w + 0.05, w * 0.7 + 0.05, 0.04), mat(0x1a1a1a), 0, 0, -0.025, g);
   part(new THREE.PlaneGeometry(w, w * 0.7), new THREE.MeshBasicMaterial({ map: orderTex }), 0, 0, 0, g).castShadow = false;
   if (stand) part(new THREE.BoxGeometry(0.05, 0.26, 0.05), mat(0x1a1a1a), 0, -w * 0.35 - 0.13, -0.03, g);
@@ -326,6 +321,7 @@ function orderScreen(w, x, y, z, stand) { // faces -z, towards the staff side
 }
 orderScreen(0.56, -3.5, 1.46, -3.72, true); // on the front counter
 orderScreen(0.9, 4.2, 1.95, -6.13, false);  // kitchen display above the prep station
+orderScreen(1, 7.88, 2.05, -4.4, false, -Math.PI / 2); // on the side wall of the grill area
 
 // Grill — low-poly Argentine parrilla: brick base (collider + interaction target), iron grate, crank, side brasero, hood
 const grill = box(3, 0.9, 0.9, brickMats(3, 0.9, 0.9), 4.5, 0.45, -5.3);
@@ -384,11 +380,10 @@ const hood = part(new THREE.CylinderGeometry(0.5, 1.9, 0.7, 4, 1, true).rotateY(
 hood.scale.set(1.49, 1, 0.45);
 hood.castShadow = false;
 part(new THREE.CylinderGeometry(0.16, 0.16, 1.1, 10), hoodMat, 4.8, 3.85, -5.3).castShadow = false;
-const grillLabel = makeLabel('PARRILLA', 0.4);
-grillLabel.position.set(4.5, 2.4, -5.2);
-scene.add(grillLabel);
 const SLOTS = [3.6, 4.5, 5.4];
 const slotCount = () => (has('grill') ? 3 : 2);
+// one lamp per grill slot on the brick front: yellow cooking, green ready, flashing red about to burn
+const slotLights = SLOTS.map(x => part(new THREE.BoxGeometry(0.15, 0.06, 0.02), new THREE.MeshBasicMaterial({ color: 0x333333 }), x, 0.8, -4.84));
 
 // Tables
 const clothTex = (() => {
@@ -429,9 +424,8 @@ const tables = [
       plate: new THREE.Vector3(t.x + dx * 0.3, 0.82, t.z + dz * 0.3), side: new THREE.Vector3(-dz, 0, dx) };
   });
   g.traverse(o => { o.castShadow = o.receiveShadow = true; });
-  const label = makeLabel(String(i + 1), 0.3);
-  label.position.set(0, 1.2, 0);
-  g.add(label);
+  const num = new THREE.MeshStandardMaterial({ map: labelTex(String(i + 1), '#f4efe6', '#7a1f1f', 1), roughness: 0.9 });
+  part(new THREE.BoxGeometry(0.1, 0.1, 0.1), [num, num, tableWood, tableWood, num, num], 0, 0.84, 0, g); // table number block
   g.userData.kind = 'table';
   scene.add(g);
   const col = { minX: t.x - 0.6, maxX: t.x + 0.6, minZ: t.z - 0.6, maxZ: t.z + 0.6, on: i < 3 };
@@ -532,6 +526,7 @@ function makeFoodMesh(type) {
 }
 // cold-storage items: whole cuts get their own shape, everything else looks like its dish
 function makeItemMesh(it) {
+  if (ITEMS[it].sauce) return makeBottle(ITEMS[it].sauce);
   if (it === 'filet_whole') {
     foodGeo.filet_whole ||= paint(new THREE.LatheGeometry([V2(0.001, -0.22), V2(0.04, -0.2), V2(0.062, -0.1), V2(0.07, 0.04), V2(0.06, 0.15), V2(0.032, 0.21), V2(0.001, 0.225)], 10).rotateZ(Math.PI / 2), 0xffffff);
     const m = new THREE.Mesh(foodGeo.filet_whole, foodMat('filet'));
@@ -541,6 +536,23 @@ function makeItemMesh(it) {
   const m = makeFoodMesh(ITEMS[it].dish);
   if (it === 'vacio_whole') m.scale.set(1.8, 1.4, 1.7);
   return m;
+}
+const cupMat = mat(0xf4f4f0), capMat = mat(0x7a1f1f), sauceMats = {};
+const sauceMat = s => (sauceMats[s] ||= new THREE.MeshStandardMaterial({ color: SAUCES[s].color, roughness: 0.35 }));
+const cupGeo = new THREE.CylinderGeometry(0.034, 0.026, 0.03, 12);
+function makeBottle(s) { // sauce bottle with a paper label (origin at its middle, bottom at y -0.075)
+  const g = new THREE.Group();
+  part(new THREE.CylinderGeometry(0.042, 0.042, 0.13, 10), sauceMat(s), 0, -0.01, 0, g);
+  part(new THREE.CylinderGeometry(0.0435, 0.0435, 0.05, 10), cupMat, 0, -0.01, 0, g);
+  part(new THREE.CylinderGeometry(0.016, 0.04, 0.04, 10), sauceMat(s), 0, 0.075, 0, g);
+  part(new THREE.CylinderGeometry(0.018, 0.018, 0.02, 8), capMat, 0, 0.105, 0, g);
+  return g;
+}
+function makeCup(s) { // small ramekin of sauce that goes next to a dish
+  const g = new THREE.Group();
+  part(cupGeo, cupMat, 0, 0, 0, g);
+  g.userData.fill = part(new THREE.CylinderGeometry(0.029, 0.029, 0.004, 12), sauceMat(s), 0, 0.012, 0, g);
+  return g;
 }
 const foodState = f => {
   const d = FOODS[f.type];
@@ -552,24 +564,23 @@ function startCooking(type, q = 0) {
   const mesh = makeFoodMesh(type);
   mesh.position.set(SLOTS[slot], 0.97, -5.3);
   mesh.userData.kind = 'food';
-  const bar = makeBar(0.4);
-  bar.position.set(SLOTS[slot], 1.35, -5.3);
-  scene.add(mesh, bar);
-  const f = { type, q, t: 0, mesh, slot, bar };
+  scene.add(mesh);
+  const f = { type, q, t: 0, mesh, slot };
   mesh.userData.ref = f;
   grillFood.push(f);
   sfx.cook();
 }
 
 function removeGrillFood(f) {
-  grillFood.splice(grillFood.indexOf(f), 1);
-  scene.remove(f.bar);
+  const i = grillFood.indexOf(f);
+  if (i >= 0) grillFood.splice(i, 1);
   scene.remove(f.mesh);
 }
 
 function pickUp(f) {
   removeGrillFood(f);
   if (foodState(f) === 'burnt') { reach(); toast(`Burnt ${FOODS[f.type].name} tossed!`, '#f66'); sfx.bad(); return; }
+  f.mesh.userData = {}; // off the grill: now just a dish (on a plate it must not answer as grill food)
   hold({ kind: 'cooked', type: f.type, q: f.q, mesh: f.mesh });
 }
 
@@ -652,6 +663,18 @@ function poseCustomer(c, dt) {
   r.arms.forEach((a, i) => { a.rotation.x = sitting ? -0.7 : (i ? s : -s) * 0.8; });
   if (c.state === 'eat' || c.state === 'prep') r.arms[1].rotation.x = -1.3 + Math.sin(r.t * 6) * 0.35;
 }
+// mood badge over the party leader once patience runs low: yellow, then a pulsing red
+function moodTex(sym, color) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = color; g.beginPath(); g.arc(64, 64, 58, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff'; g.font = 'bold 80px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(sym, 64, 68);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const MOOD = { warn: new THREE.SpriteMaterial({ map: moodTex('!', '#d99a1e') }), angry: new THREE.SpriteMaterial({ map: moodTex('!!', '#d03030') }) };
 const MEMBER_OFFSETS = [[0, 0], [0.55, 0], [-0.55, 0], [0, 0.55]]; // where party members stand next to their leader
 function spawnParty() { // a party walks in together; the leader orders and pays for the table
   const free = tables.filter(t => t.active && !t.customer);
@@ -663,11 +686,12 @@ function spawnParty() { // a party walks in together; the leader orders and pays
     scene.add(rig.root);
     return rig;
   };
-  const rig = person(0), g = rig.root, bar = makeBar(), pat = gm(PATIENCE.queue) * patienceMult();
-  bar.position.y = 2.0;
-  g.add(bar);
+  const rig = person(0), g = rig.root, mood = new THREE.Sprite(MOOD.warn), pat = gm(PATIENCE.queue) * patienceMult();
+  mood.position.y = 1.98;
+  mood.visible = false;
+  g.add(mood);
   const c = {
-    group: g, bar, table, rig, state: 'enter', path: [DOOR_IN.clone()], members: [], items: null, foods: [],
+    group: g, mood, table, rig, state: 'enter', path: [DOOR_IN.clone()], members: [], items: null, foods: [],
     patience: pat, maxPatience: pat, orderedAt: 0, bubble: null, eatT: 0, tipP: 1, pay: null, missedSauce: false,
   };
   for (let i = 1; i < size; i++) {
@@ -683,11 +707,12 @@ function spawnParty() { // a party walks in together; the leader orders and pays
 }
 
 function setBubble(c, text) {
-  if (c.bubble) c.group.remove(c.bubble);
+  if (c.bubble) { c.group.remove(c.bubble); c.bubble.material.map.dispose(); c.bubble.material.dispose(); }
   c.bubble = null;
   if (!text) return;
-  c.bubble = makeLabel(text, 0.35, '#fff', '#222');
-  c.bubble.position.y = 2.25;
+  c.bubble = new THREE.Sprite(new THREE.SpriteMaterial({ map: bubbleTex(text) }));
+  c.bubble.scale.set(0.7, 0.35, 1);
+  c.bubble.position.y = 2.28;
   c.group.add(c.bubble);
 }
 
@@ -724,11 +749,20 @@ function availability() {
   if (held?.kind === 'whole') a[ITEMS[held.type].dish] += per;
   else if (held?.kind === 'portion' || held?.kind === 'cooked') a[held.type]++;
   if (busy?.whole) a[ITEMS[busy.whole.type].dish] += per;
-  staff.forEach(e => { if (e.carry && ITEMS[e.carry.type]?.whole) a[ITEMS[e.carry.type].dish] += per; });
+  staff.forEach(e => { if (e.carry && ITEMS[e.carry.type]?.whole) a[ITEMS[e.carry.type].dish] += per; else if (e.carry?.kind === 'cooked') a[e.carry.type]++; });
+  passItems.forEach(p => a[p.type]++);
   customers.forEach(c => c.items && c.state !== 'exit' && c.items.forEach(i => { if (!i.served) a[i.dish]--; }));
   return a;
 }
-let sauceAvail = () => 0; // sauces become available once there is a sauce station
+function sauceAvail(s) { // cups still available: station bottle, stored bottles, cups in hands or on plates, minus open orders
+  let n = sauceLevel[s] + ITEM_KEYS.reduce((k, id) => k + (ITEMS[id].sauce === s ? stock[id].length * ITEMS[id].cups : 0), 0);
+  if (held?.kind === 'bottle' && ITEMS[held.type].sauce === s) n += ITEMS[held.type].cups;
+  if ((held?.kind === 'sauce' && held.type === s) || (held?.kind === 'cooked' && held.sauce === s)) n++;
+  passItems.forEach(p => { if (p.sauce === s) n++; });
+  staff.forEach(e => { if (e.carry?.sauce === s) n++; });
+  customers.forEach(c => c.items && c.state !== 'exit' && c.items.forEach(i => { if (i.sauce === s && !i.sauced) n--; }));
+  return n;
+}
 function pickSauce(d, cfg) {
   if (Math.random() >= cfg.sauce) return null;
   const opts = cfg.sauces.filter(x => SAUCES[x].dishes.includes(d));
@@ -776,11 +810,20 @@ function orderText(items) { // what the table is still missing, one line per dis
 }
 
 const complete = c => c.items.every(i => i.served && (!i.sauce || i.sauced));
-function serve(c, i, plate) { // plate: { type, q, mesh } from the player's hands (or a server)
+function startEating(c) { if (complete(c)) { c.tipP = c.patience / c.maxPatience; c.state = 'eat'; c.eatT = gm(EAT_MIN); } }
+function openItem(c, type, sauce, server) { // which unserved dish a plate fills (the same sauce first); the server needs an exact match
+  const ok = it => !it.served && it.dish === type && !(server && it.claimed);
+  let i = c.items.findIndex(it => ok(it) && (it.sauce || null) === (sauce || null));
+  if (i < 0 && !server) i = c.items.findIndex(ok);
+  return i;
+}
+function serve(c, i, plate) { // plate: { type, q, mesh, sauce } from the player's hands (or the server's)
   const it = c.items[i], seat = c.table.seats[it.seat % 4];
   const k = c.items.filter(x => x !== it && x.served && x.seat % 4 === it.seat % 4).length;
   it.served = true;
   it.q = plate.q;
+  it.mesh = plate.mesh;
+  if (plate.sauce && plate.sauce === it.sauce) it.sauced = true; // the cup came with the plate
   const p = seat.plate.clone().addScaledVector(seat.side, [0, 0.27, -0.27][k % 3]);
   plate.mesh.position.copy(p);
   plate.mesh.rotation.set(0, 0, 0);
@@ -793,7 +836,16 @@ function serve(c, i, plate) { // plate: { type, q, mesh } from the player's hand
     c.foods.push(pl);
   }
   sfx.serve();
-  if (complete(c)) { c.tipP = c.patience / c.maxPatience; c.state = 'eat'; c.eatT = gm(EAT_MIN); }
+  startEating(c);
+}
+function serveSauce(c, i) { // a cup of sauce for a dish that is already on the table
+  const it = c.items[i], cup = held.mesh;
+  dropHeld();
+  it.sauced = true;
+  cup.position.set(0, 0, -0.13);
+  it.mesh.add(cup);
+  sfx.serve();
+  startEating(c);
 }
 
 function billLines(c) { // receipt lines: dishes (by meat quality) and sauce cups
@@ -856,7 +908,7 @@ function leave(c, angry) {
   c.foods = [];
   c.members.forEach(m => { if (m.state !== 'exit') memberExit(m, c); });
   setBubble(c, angry ? '>:(' : null);
-  c.bar.visible = false;
+  c.mood.visible = false;
   if (angry) { today.lost += 1 + c.members.length; toast('A guest left angry!', '#f66'); sfx.bad(); }
   pos.dirty = true;
 }
@@ -925,34 +977,60 @@ function updateCustomer(c, dt) {
   if (['queue', 'order', 'wait', 'payLine', 'paying'].includes(c.state)) {
     c.patience -= dt;
     const p = c.patience / c.maxPatience;
-    setBar(c.bar, p, p > 0.5 ? 0x44dd44 : p > 0.25 ? 0xffcc33 : 0xff4444);
+    c.mood.visible = p < 0.5;
+    c.mood.material = p < 0.25 ? MOOD.angry : MOOD.warn;
+    c.mood.scale.setScalar(p < 0.25 ? 0.25 + Math.sin(performance.now() / 110) * 0.04 : 0.22);
     if (c.patience <= 0) {
       const unpaid = c.state === 'payLine' || c.state === 'paying';
       leave(c, true);
       if (unpaid) toast('A guest walked out without paying!', '#f66', 3);
     }
-  } else if (c.state !== 'exit') setBar(c.bar, 1, 0x44dd44);
+  } else c.mood.visible = false;
   poseCustomer(c, dt);
 }
 
 // ---------- Back of house, entrance, delivery ----------
 function panel(text, w, h, bg = '#000a', fg = '#fff') { // flat canvas sign facing +z
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: makeLabel(text, 1, bg, fg).material.map, transparent: true }));
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: labelTex(text, bg, fg, w / h), transparent: true }));
+  m.userData.aspect = w / h;
   scene.add(m);
   return m;
 }
-function setText(obj, text, bg = '#000a', fg = '#fff') { // re-letter a panel or label sprite
+function setText(obj, text, bg = '#000a', fg = '#fff') { // re-letter a panel or a sign face
   obj.material.map.dispose();
-  obj.material.map = makeLabel(text, 1, bg, fg).material.map;
-}
-for (const [t, x, y, z] of [['KITCHEN', 1.8, 2.75, -5.85], ['STORAGE', -2.2, 2.55, -11.3], ['OFFICE', -5.4, 2.75, -8.65], ['PREP STATION', 4.2, 2.6, -6.3]]) {
-  const l = makeLabel(t, 0.28);
-  l.position.set(x, y, z);
-  scene.add(l);
+  obj.material.map = labelTex(text, bg, fg, obj.userData.aspect);
 }
 const steel = new THREE.MeshStandardMaterial({ color: 0xc9ced2, metalness: 0.6, roughness: 0.35 });
 const wood = mat(0x6b3f22), dark = mat(0x222222);
 const hitMat = new THREE.MeshBasicMaterial({ visible: false }); // invisible, but still hit by the interaction ray
+// physical signs instead of floating labels: a painted face in a wooden frame (two-sided when it hangs free)
+function plaque(text, w, h, x, y, z, ry = 0, bg = '#2a1a10', fg = '#f4e4c8', twoSided = false, parent = scene) {
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  g.rotation.y = ry;
+  part(new THREE.BoxGeometry(w + 0.06, h + 0.06, 0.04), wood, 0, 0, 0, g);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: labelTex(text, bg, fg, w / h) }));
+  face.userData.aspect = w / h;
+  face.position.z = 0.021;
+  g.add(face);
+  if (twoSided) {
+    const back = new THREE.Mesh(face.geometry, face.material);
+    back.position.z = -0.021;
+    back.rotation.y = Math.PI;
+    g.add(back);
+  }
+  g.userData.face = face;
+  parent.add(g);
+  return g;
+}
+plaque('KITCHEN', 1.1, 0.3, 1.8, 2.7, -5.885);
+plaque('STORAGE', 1.2, 0.3, -2.2, 2.35, -11.885);
+plaque('OFFICE', 1, 0.28, -5.4, 2.75, -8.685);
+plaque('PREP STATION', 1.3, 0.28, 4.2, 2.55, -6.115, Math.PI);
+plaque('PEDIDOS', 1, 0.26, -3.9, 0.62, -3.085, 0, '#7a1f1f');
+plaque('CAJA', 0.6, 0.26, -5.4, 0.62, -3.085, 0, '#7a1f1f');
+plaque('DELIVERY', 1.2, 0.4, 13.6, 2.5, -9.5, -Math.PI / 2, '#f2c230', '#1a1a1a', true);
+plaque('PARRILLA', 1.4, 0.3, 4.8, 2.95, -4.918).rotation.x = -0.566; // on the slanted front of the hood
 
 // front door (swings out while open) + an OPEN/CLOSED sign that physically turns around
 const doorPivot = new THREE.Group();
@@ -968,7 +1046,7 @@ signPivot.position.set(-4.2, 1.95, 5.4);
 part(new THREE.BoxGeometry(0.02, 0.4, 0.02), iron, 0, 0.2, 0, signPivot);
 part(new THREE.BoxGeometry(0.94, 0.48, 0.04), wood, 0, -0.1, 0, signPivot);
 for (const [t, bg, z, ry] of [['CLOSED', '#b3261e', -0.021, Math.PI], ['OPEN', '#2e7d32', 0.021, 0]]) {
-  const f = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.4), new THREE.MeshBasicMaterial({ map: makeLabel(t, 1, bg).material.map }));
+  const f = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.4), new THREE.MeshBasicMaterial({ map: labelTex(t, bg, '#fff', 0.86 / 0.4) }));
   f.position.set(0, -0.1, z);
   f.rotation.y = ry;
   signPivot.add(f);
@@ -981,21 +1059,20 @@ colliders.push({ minX: 0.45, maxX: 5.55, minZ: -11.95, maxZ: -11.15, on: true })
 part(new THREE.BoxGeometry(5.1, 2.1, 0.06), new THREE.MeshStandardMaterial({ color: 0xe6f6ff, emissive: 0x9fd8ff, emissiveIntensity: 0.35 }), 3, 1.05, -11.92);
 part(new THREE.BoxGeometry(5.1, 0.3, 0.8), steel, 3, 1.95, -11.55);
 part(new THREE.BoxGeometry(5.1, 0.25, 0.8), steel, 3, 0.125, -11.55);
-for (let i = 0; i <= 5; i++) part(new THREE.BoxGeometry(0.05, 2.1, 0.8), steel, 0.45 + i * 1.02, 1.05, -11.55);
+const BIN_W = 5.1 / ITEM_KEYS.length;
+for (let i = 0; i <= ITEM_KEYS.length; i++) part(new THREE.BoxGeometry(0.05, 2.1, 0.8), steel, 0.45 + i * BIN_W, 1.05, -11.55);
 for (const y of [0.5, 1.15]) part(new THREE.BoxGeometry(5.1, 0.03, 0.7), steel, 3, y, -11.6);
-const capLabel = makeLabel('', 0.3);
-capLabel.position.set(3, 2.5, -11.4);
-scene.add(capLabel);
+const capPlaque = plaque('', 2.2, 0.36, 3, 2.45, -11.885, 0, '#0b3d5c', '#e6f6ff');
 const bins = ITEM_KEYS.map((id, i) => {
-  const x = 0.96 + i * 1.02;
-  const hit = part(new THREE.BoxGeometry(0.95, 1.7, 0.75), hitMat, x, 0.95, -11.5);
+  const x = 0.45 + BIN_W * (i + 0.5);
+  const hit = part(new THREE.BoxGeometry(BIN_W - 0.07, 1.7, 0.75), hitMat, x, 0.95, -11.5);
   hit.userData = { kind: 'bin', ref: id };
-  const label = panel('', 0.9, 0.27);
+  const label = panel('', BIN_W - 0.06, 0.27);
   label.position.set(x, 1.95, -11.14);
   const shows = [0, 1, 2, 3].map(k => {
     const m = makeItemMesh(id);
-    m.position.set(x + (k % 2 ? 0.2 : -0.2), k < 2 ? 0.59 : 1.24, -11.55);
-    m.scale.multiplyScalar(0.85);
+    m.position.set(x + (k % 2 ? 0.15 : -0.15), k < 2 ? 0.59 : 1.24, -11.55);
+    m.scale.multiplyScalar(ITEMS[id].whole ? 0.6 : ITEMS[id].sauce ? 1 : 0.8);
     scene.add(m);
     return m;
   });
@@ -1016,9 +1093,7 @@ const trayObjs = ['filet', 'vacio'].map((d, i) => {
   const x = i ? 4.95 : 3.45;
   const t = part(new THREE.BoxGeometry(0.44, 0.03, 0.34), steel, x, 0.915, -6.55);
   t.userData = { kind: 'tray', ref: d };
-  const label = makeLabel('', 0.2);
-  label.position.set(x, 1.3, -6.55);
-  scene.add(label);
+  const label = plaque('', 0.5, 0.17, x, 0.72, -6.915, Math.PI, '#1a1a1a', '#e8f1f2'); // on the front of the prep table
   const shows = Array.from({ length: 8 }, (_, k) => {
     const m = makeFoodMesh(d);
     m.scale.setScalar(d === 'vacio' ? 0.4 : 0.55);
@@ -1061,7 +1136,7 @@ const monitor = new THREE.Group();
 monitor.position.set(-6.3, 1.12, -11.62);
 part(new THREE.BoxGeometry(0.62, 0.42, 0.05), dark, 0, 0, 0, monitor);
 part(new THREE.BoxGeometry(0.06, 0.2, 0.06), dark, 0, -0.28, -0.02, monitor);
-const osScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.36), new THREE.MeshBasicMaterial({ map: makeLabel('ASADO OS\nUPGRADES · WHOLESALE\nFINANCES', 1, '#10231a', '#9fe0b0').material.map }));
+const osScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.36), new THREE.MeshBasicMaterial({ map: labelTex('ASADO OS\nUPGRADES · WHOLESALE\nFINANCES', '#10231a', '#9fe0b0', 0.56 / 0.36) }));
 osScreen.position.z = 0.026;
 monitor.add(osScreen);
 monitor.userData.kind = 'terminal';
@@ -1072,7 +1147,7 @@ const decor = new THREE.Group();
 decor.visible = false;
 scene.add(decor);
 const leaf = new THREE.MeshStandardMaterial({ color: 0x3f7a3a, roughness: 0.9, flatShading: true });
-for (const [x, z] of [[-7.4, 5.3], [7.4, 5.3], [7.4, -4.9], [-2.4, -5.5]]) {
+for (const [x, z] of [[-7.4, 5.3], [7.4, 5.3], [7.35, -1.9], [-2.4, -5.5]]) {
   part(new THREE.CylinderGeometry(0.22, 0.16, 0.4, 8), mat(0xa0522d), x, 0.2, z, decor);
   part(new THREE.IcosahedronGeometry(0.4, 0), leaf, x, 0.8, z, decor);
 }
@@ -1082,10 +1157,173 @@ for (const t of tables) {
   part(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffe2a0 }), t.x, 2.22, t.z, decor);
 }
 for (const [x, ry] of [[-7.88, Math.PI / 2], [7.88, -Math.PI / 2]]) {
-  const p = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.85), new THREE.MeshBasicMaterial({ map: makeLabel('ASADO\ndesde 1987', 1, '#5a2a1a', '#f4e4c8').material.map }));
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.85), new THREE.MeshBasicMaterial({ map: labelTex('ASADO\ndesde 1987', '#5a2a1a', '#f4e4c8', 1.3 / 0.85) }));
   p.position.set(x, 1.9, 1.5);
   p.rotation.y = ry;
   decor.add(p);
+}
+
+// ---------- Service counter, sauce station, interior ----------
+// The pass: finished plates wait on the service counter between the grill and the dining room
+const PASS_Z = -3.4, PASS_Y = 1.05, PASS_SLOTS = [3.1, 3.95, 4.8, 5.65, 6.5, 7.35];
+const counterWood = mat(0x7a4a25), capWood = mat(0x3a2a1a);
+const pass = box(5.3, 1, 0.5, counterWood, 5.25, 0.5, PASS_Z);
+pass.userData.kind = 'pass';
+box(5.36, 0.05, 0.62, steel, 5.25, 1.025, PASS_Z, false);
+for (const x of [2.7, 7.8]) box(0.05, 0.85, 0.05, iron, x, 1.475, PASS_Z, false); // heat-lamp gantry
+box(5.15, 0.05, 0.07, iron, 5.25, 1.92, PASS_Z, false);
+for (const x of [3.5, 5.25, 7]) {
+  part(new THREE.ConeGeometry(0.11, 0.12, 10, 1, true), iron, x, 1.84, PASS_Z);
+  part(new THREE.SphereGeometry(0.045, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffb060 }), x, 1.8, PASS_Z).castShadow = false;
+}
+plaque('SERVICE', 1, 0.24, 4.1, 2.09, PASS_Z, 0, '#2a1a10', '#ffd76a', true);
+// low dividers close the staff side off from the dining room (staff gap at x 0.55..1.85)
+for (const [w, x] of [[3.55, -1.225], [0.75, 2.225]]) {
+  box(w, 1.05, 0.12, counterWood, x, 0.525, PASS_Z);
+  box(w + 0.06, 0.05, 0.2, capWood, x, 1.075, PASS_Z, false);
+}
+const passItems = []; // { slot, type, q, sauce, mesh (the food), group (plate + food), claimed }
+function passPut(p) { // put a plated dish { type, q, mesh, sauce } in the first free spot; false when the pass is full
+  const slot = PASS_SLOTS.findIndex((_, i) => !passItems.some(it => it.slot === i));
+  if (slot < 0) return false;
+  const g = new THREE.Group();
+  g.position.set(PASS_SLOTS[slot], PASS_Y, PASS_Z);
+  part(plateGeo, plateMat, 0, 0.006, 0, g);
+  p.mesh.position.set(0, 0.029, 0);
+  p.mesh.rotation.set(0, 0, 0);
+  g.add(p.mesh);
+  scene.add(g);
+  const it = { slot, type: p.type, q: p.q, sauce: p.sauce || null, mesh: p.mesh, group: g, claimed: false };
+  g.userData = { kind: 'plate', ref: it };
+  passItems.push(it);
+  return true;
+}
+function takeFromPass(it) { // → a plated dish to carry
+  passItems.splice(passItems.indexOf(it), 1);
+  scene.remove(it.group);
+  return { kind: 'cooked', type: it.type, q: it.q, mesh: it.mesh, sauce: it.sauce };
+}
+function addSauce(it) { // the held cup goes onto a plate waiting at the pass
+  const cup = held.mesh;
+  it.sauce = held.type;
+  dropHeld();
+  cup.position.set(0, 0, -0.13);
+  it.mesh.add(cup);
+  sfx.serve();
+}
+
+// sauce station: bottles stand in holders; fill a cup, then add it to a plate at the pass or take it to the table
+const sauceLevel = Object.fromEntries(Object.keys(SAUCES).map(k => [k, 0])); // cups left in each station bottle
+const station = box(1.8, 0.95, 0.5, steel, -0.4, 0.475, -5.64);
+station.userData.kind = 'sauceStation';
+plaque('SAUCES', 0.9, 0.24, -0.4, 1.75, -5.885);
+const holders = Object.keys(SAUCES).map((k, i) => {
+  const x = -1 + i * 0.6;
+  part(new THREE.CylinderGeometry(0.065, 0.065, 0.02, 14), dark, x, 0.96, -5.64);
+  const bottle = makeBottle(k);
+  bottle.position.set(x, 1.045, -5.64);
+  scene.add(bottle);
+  const hit = part(new THREE.BoxGeometry(0.42, 0.5, 0.45), hitMat, x, 1.2, -5.64);
+  hit.userData = { kind: 'sauce', ref: k };
+  const label = plaque('', 0.48, 0.16, x, 0.75, -5.385, 0, '#1a1a1a', '#e8f1f2');
+  return { s: k, x, bottle, hit, label };
+});
+for (let i = 0; i < 4; i++) part(cupGeo, cupMat, 0.3, 0.966 + i * 0.022, -5.62); // a stack of empty cups
+function refreshSauces() {
+  for (const h of holders) {
+    const n = sauceLevel[h.s];
+    h.bottle.visible = n > 0;
+    setText(h.label.userData.face, `${SAUCES[h.s].short.toUpperCase()} ${n}/${ITEMS[h.s + '_bottle'].cups}`, n ? '#1f3a24' : '#3a1f1f', '#e8f1f2');
+  }
+}
+refreshSauces();
+function placeBottle() {
+  const s = ITEMS[held.type].sauce;
+  sauceLevel[s] = ITEMS[held.type].cups;
+  dropHeld();
+  refreshSauces();
+  sfx.store();
+  toast(`${SAUCES[s].name} bottle placed at the sauce station`);
+}
+function pourBack() {
+  sauceLevel[held.type] = Math.min(ITEMS[held.type + '_bottle'].cups, sauceLevel[held.type] + 1);
+  dropHeld();
+  refreshSauces();
+}
+function startPour(s) { // fill a cup from the station bottle; the view locks onto the bottle while the hands pour
+  const h = holders.find(k => k.s === s), p = camera.position;
+  sauceLevel[s]--;
+  refreshSauces();
+  handSauce.color.setHex(SAUCES[s].color);
+  busy = { kind: 'pour', t: 0, dur: 1.2, sauce: s,
+    yaw: Math.atan2(p.x - h.x, p.z + 5.64), pitch: -Math.atan2(EYE - 1.05, Math.hypot(h.x - p.x, -5.64 - p.z)) };
+  sfx.pour();
+}
+
+// menu chalkboard behind the front counter
+const menuCanvas = document.createElement('canvas');
+menuCanvas.width = 1024;
+menuCanvas.height = 576;
+const menuTex = new THREE.CanvasTexture(menuCanvas);
+menuTex.colorSpace = THREE.SRGBColorSpace;
+box(2, 1.17, 0.05, wood, -4.6, 2.35, -5.875, false);
+part(new THREE.PlaneGeometry(1.9, 1.07), new THREE.MeshBasicMaterial({ map: menuTex }), -4.6, 2.35, -5.849).castShadow = false;
+function drawMenu() { // dishes and sauces at today's prices
+  const g = menuCanvas.getContext('2d');
+  g.fillStyle = '#1d2a22'; g.fillRect(0, 0, 1024, 576);
+  g.strokeStyle = '#c9b48a'; g.lineWidth = 6; g.strokeRect(14, 14, 996, 548);
+  g.textBaseline = 'middle'; g.fillStyle = '#f3ead8';
+  g.font = 'bold 66px Georgia, serif'; g.textAlign = 'center'; g.fillText('PARRILLA · MENÚ', 512, 70);
+  menu().forEach((d, i) => {
+    g.font = '44px Georgia, serif';
+    g.textAlign = 'left'; g.fillText(FOODS[d].name, 60, 160 + i * 66);
+    g.textAlign = 'right'; g.fillText(`$${FOODS[d].price}`, 610, 160 + i * 66);
+  });
+  g.fillStyle = '#e7c76a'; g.font = 'bold 44px Georgia, serif'; g.textAlign = 'left'; g.fillText('SALSAS', 680, 160);
+  g.fillStyle = '#f3ead8'; g.font = '36px Georgia, serif';
+  Object.values(SAUCES).forEach((x, i) => g.fillText(`${x.name}  $${x.price}`, 680, 226 + i * 58));
+  if (lvl('quality')) {
+    g.fillStyle = '#e7c76a'; g.font = 'italic 32px Georgia, serif'; g.textAlign = 'center';
+    g.fillText(`${QUALITY.slice(1, lvl('quality') + 1).map(q => q.name).join(', ')} cuts are priced higher`, 512, 528);
+  }
+  menuTex.needsUpdate = true;
+}
+drawMenu();
+
+// wine shelf behind the counter, charcoal sacks next to the brasero
+const wines = [0x3b1520, 0x203a22, 0x5a1a1a].map(mat), wineGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.26, 8);
+for (const y of [1.25, 1.75]) box(1, 0.04, 0.28, wood, -7.3, y, -5.76, false);
+for (let i = 0; i < 12; i++) part(wineGeo, wines[i % 3], -7.7 + (i % 6) * 0.16, i < 6 ? 1.4 : 1.9, -5.76);
+for (const [x, z, r] of [[7.4, -5.5, 0.3], [7.45, -4.95, -0.2]]) part(new THREE.CylinderGeometry(0.2, 0.24, 0.55, 8), mat(0x5b5040), x, 0.275, z).rotation.y = r;
+
+// ceiling with wooden beams and lamps: the restaurant reads as an enclosed room
+box(16.4, 0.1, 18.4, new THREE.MeshStandardMaterial({ color: 0xe6dccb, roughness: 0.9, emissive: 0x2e281f }), 0, WH + 0.05, -3, false).castShadow = false;
+const beamWood = mat(0x4a2e18), lampMat = new THREE.MeshBasicMaterial({ color: 0xfff1d6 });
+for (const z of [-4.4, -1.4, 1.6, 4.6]) box(16, 0.2, 0.16, beamWood, 0, WH - 0.1, z, false).castShadow = false;
+for (const [x, z] of [[-2, 0.5], [4, 2.2], [-4.6, -4.6]]) part(new THREE.CylinderGeometry(0.22, 0.22, 0.05, 14), lampMat, x, WH - 0.03, z).castShadow = false;
+const diningLight = new THREE.PointLight(0xffd8a8, 8, 13); // one warm light for the room keeps software rendering fast
+diningLight.position.set(0.5, WH - 0.4, 0);
+scene.add(diningLight);
+// windows (bright glass in wooden frames) and wainscoting around the dining room
+const glass = new THREE.MeshBasicMaterial({ color: 0xcfe6f2 });
+function windowAt(x, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, 1.75, z);
+  g.rotation.y = ry;
+  part(new THREE.PlaneGeometry(1.3, 1.1), glass, 0, 0, 0, g).castShadow = false;
+  for (const [w, h, px, py] of [[1.42, 0.07, 0, 0.585], [1.42, 0.07, 0, -0.585], [0.07, 1.24, 0.685, 0], [0.07, 1.24, -0.685, 0], [0.04, 1.1, 0, 0], [1.3, 0.04, 0, 0]]) {
+    part(new THREE.BoxGeometry(w, h, 0.05), wood, px, py, 0.02, g);
+  }
+  part(new THREE.BoxGeometry(1.5, 0.05, 0.14), wood, 0, -0.63, 0.06, g);
+  scene.add(g);
+}
+for (const x of [-4.1, 0.2, 4.4]) windowAt(x, 5.89, Math.PI);
+for (const z of [-1.4, 4.3]) windowAt(7.89, z, -Math.PI / 2);
+windowAt(-7.89, 3.4, Math.PI / 2);
+const wainscot = mat(0x5a3a22);
+for (const [w, d, x, z] of [[0.03, 11.8, -7.885, 0], [0.03, 11.8, 7.885, 0], [12.9, 0.03, 1.45, 5.885], [0.9, 0.03, -7.45, 5.885]]) {
+  box(w, 1, d, wainscot, x, 0.5, z, false).castShadow = false;
+  box(w + 0.04, 0.04, d + 0.04, capWood, x, 1.02, z, false);
 }
 
 // delivery crates (free starter crates wait in the yard on day 1)
@@ -1093,8 +1331,9 @@ function makeCrate(item, qs, starter) {
   const g = new THREE.Group();
   part(new THREE.BoxGeometry(0.55, 0.38, 0.42), mat(starter ? 0x9c6b3c : 0xb08850), 0, 0.19, 0, g);
   part(new THREE.BoxGeometry(0.57, 0.04, 0.44), mat(0x6b4a2a), 0, 0.37, 0, g);
-  const label = makeLabel(`${ITEMS[item].name.toUpperCase()} ×${qs.length}${starter ? '\nFREE STARTER' : ''}`, 0.22);
-  label.position.y = 0.62;
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.36), new THREE.MeshBasicMaterial({ map: labelTex(`${ITEMS[item].name.toUpperCase()}\n×${qs.length}${starter ? '\nFREE STARTER' : ''}`, '#f4e4c8', '#3a2a1a', 1.4) }));
+  label.rotation.set(-Math.PI / 2, 0, -Math.PI / 2); // printed on the lid, readable from the back door
+  label.position.y = 0.393;
   g.add(label);
   const c = { item, qs, mesh: g, label, spot: -1 };
   g.userData = { kind: 'crate', ref: c };
@@ -1122,12 +1361,12 @@ function refreshStorage() {
     setText(b.label, `${ITEMS[b.id].name.toUpperCase()}\n×${n}`, n ? '#0b3d5c' : '#333a');
     b.shows.forEach((m, k) => { m.visible = k < n; });
   }
-  setText(capLabel, `COLD STORAGE  ${usedSpace()}/${capacity()}`);
+  setText(capPlaque.userData.face, `COLD STORAGE  ${usedSpace()}/${capacity()}`, '#0b3d5c', '#e6f6ff');
 }
 function refreshTrays() {
   for (const t of trayObjs) {
     const n = trays[t.d].length;
-    setText(t.label, `${FOODS[t.d].name.toUpperCase()} ×${n}`);
+    setText(t.label.userData.face, `${FOODS[t.d].name.toUpperCase()} ×${n}`, '#1a1a1a', '#e8f1f2');
     t.shows.forEach((m, k) => { m.visible = k < n; });
   }
 }
@@ -1136,9 +1375,8 @@ refreshTrays();
 function pickUpCrate(c) {
   crates.splice(crates.indexOf(c), 1);
   scene.remove(c.mesh);
-  c.mesh.rotation.set(0, 0, 0);
+  c.mesh.rotation.set(0, Math.PI / 2, 0); // lid text faces the player
   c.mesh.scale.setScalar(0.72);
-  c.label.visible = false;
   hold({ kind: 'crate', type: c.item, qs: c.qs, crate: c, mesh: c.mesh });
 }
 function storeCrate() {
@@ -1152,14 +1390,14 @@ function storeCrate() {
 function takeFromBin(id) {
   const it = ITEMS[id], q = stock[id].shift();
   refreshStorage();
-  hold({ kind: it.whole ? 'whole' : 'portion', type: it.whole ? id : it.dish, q, mesh: makeItemMesh(id) });
+  hold({ kind: it.whole ? 'whole' : it.sauce ? 'bottle' : 'portion', type: it.dish && !it.whole ? it.dish : id, q, mesh: makeItemMesh(id) });
 }
 function takeFromTray(d) {
   const q = trays[d].shift();
   refreshTrays();
   hold({ kind: 'portion', type: d, q, mesh: makeFoodMesh(d) });
 }
-const binOf = h => (h.kind === 'whole' ? h.type : ITEMS[h.type] && !ITEMS[h.type].whole ? h.type : null); // null: goes on a tray
+const binOf = h => (h.kind === 'whole' || h.kind === 'bottle' ? h.type : ITEMS[h.type] && !ITEMS[h.type].whole ? h.type : null); // null: goes on a tray
 function putBack() {
   const h = held, b = binOf(h);
   if (b) stock[b].unshift(h.q); else trays[h.type].unshift(h.q);
@@ -1173,7 +1411,7 @@ function startPrep() { // lay the whole cut on the board; hands + knife cut it w
   dropHeld();
   h.mesh.position.set(4.2, 0.99, -6.6);
   scene.add(h.mesh);
-  busy = { t: 0, dur: has('prep') ? 1.5 : 3, whole: h, s0: h.mesh.scale.x, chop: 0,
+  busy = { kind: 'cut', t: 0, dur: has('prep') ? 1.5 : 3, whole: h, s0: h.mesh.scale.x, chop: 0,
     yaw: Math.atan2(p.x - 4.2, p.z + 6.6), pitch: -Math.atan2(EYE - 0.95, Math.hypot(4.2 - p.x, -6.6 - p.z)) };
 }
 function updateBusy(dt) {
@@ -1182,6 +1420,12 @@ function updateBusy(dt) {
   yaw += Math.atan2(Math.sin(b.yaw - yaw), Math.cos(b.yaw - yaw)) * k;
   pitch += (b.pitch - pitch) * k;
   camera.rotation.set(pitch, yaw, 0);
+  if (b.kind === 'pour') { // the hands tip the bottle over the cup (updateHands), then hold the filled cup
+    if (b.t < b.dur) return;
+    busy = null;
+    hold({ kind: 'sauce', type: b.sauce, q: 0, mesh: makeCup(b.sauce) });
+    return;
+  }
   b.whole.mesh.scale.x = b.s0 * (1 - 0.55 * Math.min(1, b.t / b.dur));
   if ((b.chop -= dt) <= 0) { b.chop = 0.2; sfx.chop(); }
   if (b.t < b.dur) return;
@@ -1238,11 +1482,63 @@ const STAFF_AI = {
       e.path = [STAFF_HOME.prep.clone()];
     } else if (e.state === 'back' && arrived) { e.state = 'idle'; e.t = 2; }
   },
+  server(e, dt) { // wait → take a plate that matches an open order from the pass → serve it at the table → return
+    const arrived = stepPath(e, dt), home = () => { e.state = 'back'; e.task = null; e.path = [new THREE.Vector3(e.group.position.x, 0, -1), STAFF_HOME.server.clone()]; };
+    if (e.state === 'idle' && (e.t -= dt) <= 0) {
+      e.t = 0.5;
+      for (const it of passItems) {
+        const m = !it.claimed && findOrder(it.type, it.sauce);
+        if (!m) continue;
+        it.claimed = m.c.items[m.i].claimed = true;
+        e.task = { it, ...m };
+        e.state = 'toPass';
+        e.path = [new THREE.Vector3(PASS_SLOTS[it.slot], 0, -2.8)];
+        break;
+      }
+    } else if (e.state === 'toPass' && arrived) {
+      const { it, c, i } = e.task;
+      it.claimed = c.items[i].claimed = false;
+      if (!passItems.includes(it) || c.state !== 'wait' || c.items[i].served) return home();
+      c.items[i].claimed = true;
+      e.carry = takeFromPass(it);
+      e.tray = new THREE.Group();
+      e.tray.add(new THREE.Mesh(plateGeo, plateMat), e.carry.mesh);
+      e.carry.mesh.position.set(0, 0.023, 0);
+      e.tray.position.set(0, 1.08, 0.36);
+      e.rig.body.add(e.tray);
+      const lane = c.table.seats[c.items[i].seat % 4].lane;
+      e.state = 'deliver';
+      e.path = [new THREE.Vector3(lane.x, 0, -1), lane.clone()];
+    } else if (e.state === 'deliver' && arrived) {
+      const { c, i } = e.task;
+      c.items[i].claimed = false;
+      const j = c.state === 'wait' ? openItem(c, e.carry.type, e.carry.sauce, true) : -1;
+      e.rig.body.remove(e.tray);
+      if (j >= 0) { serve(c, j, e.carry); e.carry = null; return home(); }
+      e.rig.body.add(e.tray); // the guests left or the dish was already served: take it back to the pass
+      e.state = 'return';
+      e.path = [new THREE.Vector3(e.group.position.x, 0, -1), new THREE.Vector3(4.8, 0, -2.8)];
+    } else if (e.state === 'return' && arrived) {
+      e.rig.body.remove(e.tray);
+      passPut(e.carry);
+      e.carry = null;
+      home();
+    } else if (e.state === 'back' && arrived) { e.state = 'idle'; e.t = 0.5; }
+  },
 };
+function findOrder(type, sauce) { // the least patient seated party still waiting for this plate
+  const waiting = customers.filter(c => c.state === 'wait').sort((a, b) => a.patience / a.maxPatience - b.patience / b.maxPatience);
+  for (const c of waiting) {
+    const i = openItem(c, type, sauce, true);
+    if (i >= 0) return { c, i };
+  }
+  return null;
+}
 function updateStaff(dt) {
   for (const e of staff) {
     STAFF_AI[e.role](e, dt);
     poseCustomer(e, dt);
+    if (e.carry) e.rig.arms.forEach(a => { a.rotation.x = -1.15; }); // both hands hold what they carry
   }
 }
 
@@ -1278,6 +1574,13 @@ function closeRestaurant() { // parties eating or waiting to pay settle up, ever
   }
   queue.length = payQueue.length = 0;
   [...grillFood].forEach(removeGrillFood);
+  passItems.splice(0).forEach(p => scene.remove(p.group)); // leftover plates are thrown out
+  for (const e of staff) if (e.role === 'server') {
+    if (e.carry) e.rig.body.remove(e.tray);
+    e.carry = e.task = null;
+    e.state = 'back';
+    e.path = [STAFF_HOME.server.clone()];
+  }
   const w = wages();
   money -= w;
   today.staff += w;
@@ -1306,12 +1609,14 @@ function showSummary() {
   document.exitPointerLock();
 }
 function nextDay() {
+  const before = dayCfg().sauces;
   day++;
   dayDone = false;
   clockMin = DAY_START;
   today = newDay();
   closeUI();
-  toast(`DAY ${day}: restock at the office terminal, then open the restaurant`, '#ffd76a', 5);
+  const fresh = dayCfg().sauces.filter(k => !before.includes(k)).map(k => SAUCES[k].name);
+  toast(fresh.length ? `DAY ${day}: guests now ask for ${fresh.join(' and ')}. Buy bottles at the office terminal` : `DAY ${day}: restock at the office terminal, then open the restaurant`, '#ffd76a', 5);
 }
 
 // ---------- ASADO OS: office terminal (upgrades + staff, wholesale, finances) ----------
@@ -1390,6 +1695,7 @@ function buyUpgrade(u) {
   if (u.id === 'cold') freezer.visible = freezerCol.on = true;
   if (u.id === 'storage') extraShelf.g.visible = extraShelf.col.on = true;
   if (u.id === 'quality') wsQ = u.level;
+  drawMenu();
   refreshStorage();
   refreshTrays();
   osMsg = `${u.name} purchased!`;
@@ -1673,10 +1979,16 @@ function getAction(o) {
     if (!c || !['wait', 'eat', 'toTable'].includes(c.state)) return { label: `Mesa ${ref.n}` };
     if (c.state === 'eat') return { label: `Mesa ${ref.n} is eating` };
     const wants = orderText(c.items).replace(/\n/g, ', ');
-    if (c.state === 'toTable' || h?.kind !== 'cooked') return { label: `Mesa ${ref.n} wants: ${wants}` };
-    const i = c.items.findIndex(it => !it.served && it.dish === h.type);
+    if (c.state === 'toTable') return { label: `Mesa ${ref.n} wants: ${wants}` };
+    if (h?.kind === 'sauce') {
+      const i = c.items.findIndex(it => it.served && it.sauce === h.type && !it.sauced);
+      if (i < 0) return { label: `Mesa ${ref.n} doesn't need ${SAUCES[h.type].name} now (wants ${wants})` };
+      return { label: `[E] Serve ${SAUCES[h.type].name} with the ${FOODS[c.items[i].dish].name}`, fn: () => serveSauce(c, i) };
+    }
+    if (h?.kind !== 'cooked') return { label: `Mesa ${ref.n} wants: ${wants} · patience ${Math.max(0, Math.round(100 * c.patience / c.maxPatience))}%` };
+    const i = openItem(c, h.type, h.sauce, false);
     if (i < 0) return { label: `Mesa ${ref.n} didn't order ${FOODS[h.type].name} (wants ${wants})` };
-    return { label: `[E] Serve ${FOODS[h.type].name}`, fn: () => { const p = held; dropHeld(); serve(c, i, p); } };
+    return { label: `[E] Serve ${heldName().replace(/^grilled /, '')}`, fn: () => { const p = held; dropHeld(); serve(c, i, p); } };
   }
   if (kind === 'sign' || kind === 'door') {
     if (isOpen) return { label: '[E] CLOSE RESTAURANT', fn: closeRestaurant };
@@ -1687,7 +1999,7 @@ function getAction(o) {
   if (kind === 'bin') {
     const n = stock[ref].length, name = ITEMS[ref].name;
     if (h?.kind === 'crate') return { label: `[E] Store ${crateText(h.crate)}`, fn: storeCrate };
-    if (h && (h.kind === 'whole' || h.kind === 'portion') && binOf(h) === ref) return { label: `[E] Put back ${name}`, fn: putBack };
+    if (h && (h.kind === 'whole' || h.kind === 'portion' || h.kind === 'bottle') && binOf(h) === ref) return { label: `[E] Put back ${name}`, fn: putBack };
     if (h) return { label: 'Hands full' };
     if (!n) return { label: `${name}: empty. Order more at the office terminal` };
     return { label: `[E] Take ${name}${qTag(stock[ref][0])} (${n} left)`, fn: () => takeFromBin(ref) };
@@ -1707,6 +2019,39 @@ function getAction(o) {
     if (camera.position.z > -3.85) return { label: 'Register: step behind the counter to use it' };
     return { label: posCur() ? '[E] USE REGISTER · a guest is waiting to pay' : '[E] USE REGISTER', fn: openPOS };
   }
+  if (kind === 'pass') {
+    if (h?.kind === 'cooked') {
+      if (passItems.length >= PASS_SLOTS.length) return { label: 'Service counter full' };
+      return { label: `[E] Place ${heldName()} on the service counter`, fn: () => { const p = held; dropHeld(); passPut(p); sfx.serve(); } };
+    }
+    if (h?.kind === 'sauce') return { label: 'Look at a plate on the service counter to add the sauce' };
+    return { label: hired('server') ? 'Service counter: the server takes plates from here to the tables' : 'Service counter: put finished plates here' };
+  }
+  if (kind === 'plate') {
+    const name = FOODS[ref.type].name + (ref.sauce ? ` + ${SAUCES[ref.sauce].short}` : '');
+    if (h?.kind === 'sauce') {
+      if (ref.sauce) return { label: `${name} already has a sauce` };
+      if (!SAUCES[h.type].dishes.includes(ref.type)) return { label: `${SAUCES[h.type].name} doesn't go with ${FOODS[ref.type].name}` };
+      return { label: `[E] Add ${SAUCES[h.type].name} to the ${FOODS[ref.type].name}`, fn: () => addSauce(ref) };
+    }
+    if (h) return getAction(pass);
+    if (ref.claimed) return { label: `${name}: the server is coming for it` };
+    return { label: `[E] Take ${name}${qTag(ref.q)}`, fn: () => hold(takeFromPass(ref)) };
+  }
+  if (kind === 'sauce' || kind === 'sauceStation') {
+    const k = kind === 'sauce' ? ref : h?.kind === 'bottle' ? ITEMS[h.type].sauce : h?.kind === 'sauce' ? h.type : null;
+    if (!k) return { label: 'Sauce station: look at a bottle to fill a cup' };
+    const name = SAUCES[k].name, n = sauceLevel[k];
+    if (h?.kind === 'bottle') {
+      if (ITEMS[h.type].sauce !== k) return { label: `This holder is for ${name}` };
+      if (n) return { label: `The ${name} bottle still has ${n} cups` };
+      return { label: `[E] Place the ${name} bottle`, fn: placeBottle };
+    }
+    if (h?.kind === 'sauce' && h.type === k) return { label: `[E] Pour the cup back into the ${name}`, fn: pourBack };
+    if (h) return { label: 'Hands full' };
+    if (!n) return { label: `${name}: empty. Bring a bottle from cold storage` };
+    return { label: `[E] Fill a cup of ${name} (${n} left)`, fn: () => startPour(k) };
+  }
   if (kind === 'terminal') return { label: '[E] USE TERMINAL', fn: openTerminal };
   return null;
 }
@@ -1714,13 +2059,15 @@ function heldName() {
   const h = held;
   if (h.kind === 'crate') return crateText(h.crate);
   if (h.kind === 'whole') return ITEMS[h.type].name + qTag(h.q);
-  return `${h.kind === 'cooked' ? 'grilled' : 'raw'} ${FOODS[h.type].name}${qTag(h.q)}`;
+  if (h.kind === 'bottle') return `a bottle of ${ITEMS[h.type].name}`;
+  if (h.kind === 'sauce') return `a cup of ${SAUCES[h.type].name}`;
+  return `${h.kind === 'cooked' ? 'grilled' : 'raw'} ${FOODS[h.type].name}${h.sauce ? ` + ${SAUCES[h.sauce].short}` : ''}${qTag(h.q)}`;
 }
 
 const raycaster = new THREE.Raycaster();
 raycaster.far = 3.2;
 const center = new THREE.Vector2();
-const fixedTargets = [...solids, coals, doorPivot, signPivot, board, monitor, posMon, ...bins.map(b => b.hit), ...trayObjs.map(t => t.t)];
+const fixedTargets = [...solids, coals, doorPivot, signPivot, board, monitor, posMon, ...bins.map(b => b.hit), ...trayObjs.map(t => t.t), ...holders.map(k => k.hit)];
 let currentAction = null;
 function updateInteraction() {
   if (uiMode) {
@@ -1730,7 +2077,7 @@ function updateInteraction() {
   }
   raycaster.setFromCamera(center, camera);
   const people = customers.filter(c => c.state !== 'exit').flatMap(c => [c.group, ...c.members.map(m => m.group)]);
-  const targets = [...fixedTargets, ...grillFood.map(f => f.mesh), ...tables.filter(t => t.active).map(t => t.group), ...people, ...crates.map(c => c.mesh)];
+  const targets = [...fixedTargets, ...grillFood.map(f => f.mesh), ...tables.filter(t => t.active).map(t => t.group), ...people, ...crates.map(c => c.mesh), ...passItems.map(p => p.group)];
   const hit = raycaster.intersectObjects(targets, true)[0];
   const o = hit && customerTarget(hit.object);
   currentAction = o && !busy ? getAction(o) : null;
@@ -1751,7 +2098,8 @@ function hintText() { // one line telling the player what to do next
   if (dayDone) return '';
   if (isOpen) {
     if (clockMin >= CLOSE_AT) return 'Closing time: finish the last tables, then CLOSE at the sign by the front door';
-    return posCur() && uiMode !== 'pos' ? 'A guest is waiting at the REGISTER to pay' : '';
+    if (posCur() && uiMode !== 'pos') return 'A guest is waiting at the REGISTER to pay';
+    return passItems.length && !hired('server') ? 'Plates are waiting on the SERVICE counter: take them to the tables' : '';
   }
   if (held?.kind === 'crate') return 'Carry the crate to COLD STORAGE in the back of house and press E';
   if (crates.length) return 'Crates are waiting in the DELIVERY area: go through the KITCHEN and out the back door';
@@ -1891,30 +2239,56 @@ handR.add(knife);
 const handPlate = new THREE.Mesh(plateGeo, plateMat);
 handPlate.visible = false;
 hands.add(handPlate);
+const handSauce = new THREE.MeshStandardMaterial({ roughness: 0.35 }); // recolored for each pour
+const handBottle = makeBottle('chimi'), handCup = makeCup('chimi');
+for (const o of [handBottle, handCup]) o.traverse(m => { if (m.material === sauceMat('chimi')) m.material = handSauce; });
+handBottle.position.set(0, 0.06, -0.06);
+handCup.position.set(0, 0.035, -0.07);
+handBottle.visible = handCup.visible = false;
+handR.add(handBottle);
+handL.add(handCup);
+const stream = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 1, 5), handSauce);
+stream.visible = false;
+hands.add(stream);
 const HAND_POSE = { // camera space: hands [x, y, z, rotX, rotZ], held item [x, y, z]
   none: { L: [-0.3, -0.75, -0.42, 0, 0], R: [0.3, -0.75, -0.42, 0, 0], item: [0, -0.6, -0.5] },
   hold: { L: [-0.15, -0.31, -0.5, 0, 0.35], R: [0.15, -0.31, -0.5, 0, -0.35], item: [0, -0.265, -0.53] },
   crate: { L: [-0.22, -0.31, -0.6, 0, 1.45], R: [0.22, -0.31, -0.6, 0, -1.45], item: [0, -0.42, -0.62] },
   cut: { L: [-0.16, -0.36, -0.52, 0.3, 0.2], R: [0.13, -0.31, -0.5, 0, -0.15], item: [0, -0.6, -0.5] },
+  one: { L: [-0.3, -0.75, -0.42, 0, 0], R: [0.16, -0.33, -0.48, 0, -0.25], item: [0.16, -0.24, -0.5] }, // a bottle or a cup
+  pour: { L: [-0.05, -0.31, -0.46, 0.2, 0.25], R: [0.12, -0.2, -0.46, 0, -0.35], item: [0, -0.6, -0.5] },
 };
 let reachT = 1, bobT = 0;
 function reach() { reachT = 0; } // quick pick-up / place motion
 function hold(h) { held = h; hands.add(h.mesh); reach(); sfx.pick(); }
 function dropHeld() { if (held) hands.remove(held.mesh); held = null; reach(); }
-const tmpV = new THREE.Vector3();
+const tmpV = new THREE.Vector3(), tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
 function updateHands(dt, moving) {
   reachT = Math.min(1, reachT + dt / 0.3);
   const r = Math.sin(Math.PI * reachT), k = Math.min(1, dt * 14);
-  const P = HAND_POSE[busy ? 'cut' : !held ? 'none' : held.kind === 'crate' ? 'crate' : 'hold'];
+  const one = held?.kind === 'bottle' || held?.kind === 'sauce';
+  const P = HAND_POSE[busy ? busy.kind : !held ? 'none' : held.kind === 'crate' ? 'crate' : one ? 'one' : 'hold'];
   if (moving) bobT += dt * 9;
-  const bob = Math.sin(bobT) * 0.012, chop = busy ? Math.abs(Math.sin(busy.t * 11)) : 0;
+  const bob = Math.sin(bobT) * 0.012, chop = busy?.kind === 'cut' ? Math.abs(Math.sin(busy.t * 11)) : 0;
   for (const [h, p, c] of [[handL, P.L, 0], [handR, P.R, chop]]) {
     h.position.lerp(tmpV.set(p[0], p[1] + bob + r * 0.04 + c * 0.08, p[2] - r * 0.1), k);
     h.rotation.x += (p[3] - c * 0.7 - h.rotation.x) * k;
     h.rotation.z += (p[4] - h.rotation.z) * k;
   }
-  knife.visible = !!busy;
-  boardKnife.visible = !busy;
+  knife.visible = busy?.kind === 'cut';
+  boardKnife.visible = busy?.kind !== 'cut';
+  const pouring = busy?.kind === 'pour', tilt = pouring ? Math.max(0, Math.min(1, busy.t / 0.35, (busy.dur - busy.t) / 0.25)) : 0;
+  handBottle.visible = handCup.visible = pouring;
+  handBottle.rotation.z = 1.9 * tilt;
+  if (pouring) handCup.userData.fill.scale.set(1, 1, 1).multiplyScalar(0.15 + 0.85 * Math.min(1, busy.t / busy.dur));
+  stream.visible = tilt > 0.7;
+  if (stream.visible) { // a thin pour from the bottle neck into the cup
+    hands.worldToLocal(handBottle.localToWorld(tmpA.set(0, 0.11, 0)));
+    hands.worldToLocal(handCup.localToWorld(tmpB.set(0, 0.012, 0)));
+    stream.position.addVectors(tmpA, tmpB).multiplyScalar(0.5);
+    stream.scale.set(1, tmpA.distanceTo(tmpB), 1);
+    stream.quaternion.setFromUnitVectors(UP, tmpB.sub(tmpA).normalize());
+  }
   handPlate.visible = held?.kind === 'cooked';
   const [x, y, z] = P.item;
   if (held) held.mesh.position.set(x, y + bob + r * 0.04, z - r * 0.1);
@@ -1947,10 +2321,13 @@ function frame() {
       else if (st === 'ready') col.setRGB(1, 1, 1).lerp(new THREE.Color(0.3, 0.2, 0.15), (f.t - d.cook) / d.burn * 0.7);
       else col.setRGB(0.02, 0.018, 0.018);
       f.mesh.material.color.copy(col);
-      if (st === 'cooking') setBar(f.bar, f.t / d.cook, 0xffcc33);
-      else if (st === 'ready') setBar(f.bar, 1 - (f.t - d.cook) / d.burn, Math.floor(f.t * 4) % 2 && f.t - d.cook > d.burn * 0.6 ? 0xff4444 : 0x44dd44);
-      else setBar(f.bar, 1, 0x000000);
     }
+    slotLights.forEach((l, i) => {
+      const f = grillFood.find(g => g.slot === i), st = f && foodState(f), d = f && FOODS[f.type];
+      l.visible = i < slotCount();
+      l.material.color.setHex(!f ? 0x333333 : st === 'cooking' ? 0xffb020 : st === 'burnt' ? 0x140404
+        : f.t - d.cook > d.burn * 0.6 && Math.floor(f.t * 4) % 2 ? 0xff2a2a : 0x2ee060);
+    });
     if (sizzleGain) sizzleGain.gain.value = grillFood.length ? 0.015 * grillFood.length : 0;
 
     for (const c of [...customers]) updateCustomer(c, dt);
@@ -1985,7 +2362,8 @@ frame();
 // debug/test hook
 window.__game = {
   camera, customers, queue, payQueue, grillFood, tables, stock, trays, crates, bins, trayObjs, UPGRADES, ROLES, history, staff, transactions, pos,
-  sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate },
+  scene, passItems, holders, sauceLevel, slotLights, PASS_SLOTS, SAUCES, DAYS, ITEMS, sauceAvail,
+  sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate, bottle: handBottle, cup: handCup, stream }, MOOD,
   get money() { return money; }, set money(v) { money = v; }, get drawer() { return drawer; }, get held() { return held; }, get action() { return currentAction; },
   get day() { return day; }, get isOpen() { return isOpen; }, get clockMin() { return clockMin; }, set clockMin(v) { clockMin = v; },
   get today() { return today; }, get busy() { return busy; }, get uiMode() { return uiMode; }, get delivery() { return delivery; },
