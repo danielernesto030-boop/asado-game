@@ -2174,12 +2174,18 @@ function lockPointer() {
   try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch (e) { /* pointer lock unavailable */ }
 }
 startEl.addEventListener('click', () => { initAudio(); lockPointer(); });
+// Chrome reports the cursor snapping back as one big movement when the lock engages (before or after
+// pointerlockchange): skip the first movement under a new lock and anything right after the change
+let lockedAt = 0, lockSeen = false;
 document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement) lockedAt = performance.now();
   startEl.style.display = document.pointerLockElement || uiMode ? 'none' : 'flex';
 });
 document.addEventListener('mousemove', e => {
   if (uiMode === 'pos') return posPointer(e);
-  if (!document.pointerLockElement || uiMode || busy) return;
+  const locked = !!document.pointerLockElement, fresh = locked && !lockSeen;
+  lockSeen = locked;
+  if (!locked || fresh || uiMode || busy || performance.now() - lockedAt < 150) return;
   yaw -= e.movementX * 0.0022;
   pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0022, -1.5, 1.5);
   camera.rotation.set(pitch, yaw, 0);
