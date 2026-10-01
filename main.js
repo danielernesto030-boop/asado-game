@@ -2,14 +2,23 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // ---------- Config ----------
+// Time: guest, grill and delivery timings are written in game minutes and converted with gm()
+const TIME_SCALE = 1.25;                 // game minutes per real second: the 12:00-22:00 shift lasts 8 minutes
+const gm = min => min / TIME_SCALE;      // game minutes → real seconds
 // Dishes: what guests order and what goes on the grill
 const FOODS = {
   // raw = RGB tint over the cooked texture (>1 brightens, so raw looks pale/pink)
-  chorizo:   { name: 'Chorizo',   price: 15, cook: 9,  burn: 8, raw: [1.7, 1.2, 1.2] },
-  vacio:     { name: 'Vacío',     price: 25, cook: 13, burn: 8, raw: [1.9, 1.2, 1.25] },
-  provoleta: { name: 'Provoleta', price: 20, cook: 7,  burn: 6, raw: [1.15, 1.15, 1.2] },
-  filet:     { name: 'Filet',     price: 35, cook: 11, burn: 7, raw: [2, 1.15, 1.2], tex: 'vacio' },
-  bife:      { name: 'Bife de Chorizo', price: 30, cook: 12, burn: 7, raw: [1.9, 1.2, 1.2], tex: 'vacio' },
+  chorizo:   { name: 'Chorizo',   price: 15, cook: gm(15), burn: gm(10), raw: [1.7, 1.2, 1.2] },
+  vacio:     { name: 'Vacío',     price: 25, cook: gm(20), burn: gm(10), raw: [1.9, 1.2, 1.25] },
+  provoleta: { name: 'Provoleta', price: 20, cook: gm(8),  burn: gm(6),  raw: [1.15, 1.15, 1.2] },
+  filet:     { name: 'Filet',     price: 35, cook: gm(14), burn: gm(8),  raw: [2, 1.15, 1.2], tex: 'vacio' },
+  bife:      { name: 'Bife de Chorizo', price: 30, cook: gm(16), burn: gm(8), raw: [1.9, 1.2, 1.2], tex: 'vacio' },
+};
+const MAINS = ['filet', 'vacio', 'bife'], STARTERS = ['provoleta', 'chorizo'];
+// Sauces are served in a small cup next to the dish they were ordered with (data-driven: add more here)
+const SAUCES = {
+  chimi:   { name: 'Chimichurri',   short: 'Chimi',   price: 3, color: 0x4b6f2a, dishes: ['filet', 'vacio', 'bife', 'chorizo'] },
+  criolla: { name: 'Salsa Criolla', short: 'Criolla', price: 3, color: 0xc0472e, dishes: ['chorizo', 'vacio', 'bife'] },
 };
 // Wholesale items kept in cold storage; whole cuts are cut into portions at the prep station
 const ITEMS = {
@@ -27,13 +36,30 @@ const QUALITY = [
   { name: 'Dry-Aged', cost: 3.2, price: 2.3 },
 ];
 const STARTER = [['chorizo', 6], ['provoleta', 4], ['vacio_whole', 1], ['filet_whole', 1]]; // free crates on day 1
-const TIME_SCALE = 1.7;           // game minutes per real second: the 12:00-22:00 shift lasts about 6 minutes
 const DAY_START = 11 * 60, OPEN_AT = 12 * 60, CLOSE_AT = 22 * 60;
-const COOK_WAGE = 30;
-const QUEUE_PATIENCE = 40, WAIT_PATIENCE = 75, EAT_TIME = 6;
+const FLOAT = 150;                                              // cash float in the register drawer (not revenue)
+const PATIENCE = { queue: 50, wait: 80, perDish: 12, pay: 35 }; // game minutes
+const EAT_MIN = 30;                                             // game minutes a party spends eating
 const EYE = 1.6, PLAYER_R = 0.3, SPEED = 4, NPC_SPEED = 1.6;
 const DOOR_IN = new THREE.Vector3(-6, 0, 5.2), OUTSIDE = new THREE.Vector3(-6, 0, 8.5);
-const COUNTER_SPOT = new THREE.Vector3(-4.5, 0, -2.6);
+const COUNTER_SPOT = new THREE.Vector3(-4, 0, -2.6), REGISTER_SPOT = new THREE.Vector3(-5.6, 0, -2.6);
+
+// Demand, one row per day (the last row repeats and keeps ramping slowly). Tune difficulty here.
+//   rate: parties per game hour · rush: demand multiplier during lunch/dinner · party: possible party sizes
+//   extra: chance of a shared starter per two guests · sauce: chance a dish is ordered with a sauce
+//   cash: share of parties paying cash · patience: multiplier on guest patience (never below 1)
+const DAYS = [
+  { rate: 1.0, rush: 1.4, party: [1, 1, 2], extra: 0, sauce: 0, sauces: [], cash: 0.2, patience: 1.2 },
+  { rate: 1.3, rush: 1.6, party: [1, 2, 2], extra: 0.25, sauce: 0.3, sauces: ['chimi'], cash: 0.35, patience: 1.1 },
+  { rate: 1.6, rush: 1.8, party: [1, 2, 2, 3], extra: 0.35, sauce: 0.4, sauces: ['chimi'], cash: 0.45, patience: 1.05 },
+  { rate: 1.9, rush: 2, party: [1, 2, 3, 4], extra: 0.45, sauce: 0.5, sauces: ['chimi', 'criolla'], cash: 0.5, patience: 1 },
+  { rate: 2.2, rush: 2.2, party: [2, 2, 3, 4], extra: 0.5, sauce: 0.55, sauces: ['chimi', 'criolla'], cash: 0.5, patience: 1 },
+];
+const RUSHES = [{ from: 12.5, to: 14.5, name: 'LUNCH RUSH' }, { from: 20, to: 21.5, name: 'DINNER RUSH' }]; // game hours
+function dayCfg() {
+  const d = DAYS[Math.min(day, DAYS.length) - 1], over = Math.max(0, day - DAYS.length);
+  return over ? { ...d, rate: Math.min(3.2, d.rate + 0.2 * over) } : d;
+}
 
 const UPGRADES = [
   { id: 'grill', cat: 'KITCHEN', name: 'Bigger Grill', desc: '+1 grill slot', cost: [150] },
@@ -45,33 +71,40 @@ const UPGRADES = [
   { id: 'interior', cat: 'RESTAURANT', name: 'Better Interior', desc: 'Guests are 30% more patient and tip more', cost: [180] },
   { id: 'quality', cat: 'FOOD', name: 'Better Meat Quality', desc: 'Unlocks Premium, then Angus, then Dry-Aged meat', cost: [100, 250, 500] },
   { id: 'menu', cat: 'FOOD', name: 'More Food Options', desc: 'Adds Bife de Chorizo to the menu and wholesale', cost: [120] },
-  { id: 'cook', cat: 'STAFF', name: 'Hire Prep Cook', desc: `Cuts whole meat for you · $${COOK_WAGE}/day wage`, cost: [60] },
 ];
 UPGRADES.forEach(u => { u.level = 0; });
 const lvl = id => UPGRADES.find(u => u.id === id).level;
 const has = id => lvl(id) > 0;
+// Staff roles, hired through the office terminal. The player always runs the register.
+const ROLES = {
+  prep: { name: 'Prep Cook', hire: 60, wage: 30, shirt: 0xffffff, hat: true, desc: 'Fetches whole cuts from cold storage and cuts them into portions' },
+  server: { name: 'Server', hire: 90, wage: 35, shirt: 0x26302b, desc: 'Carries finished plates from the service counter to the tables', soon: true },
+  grill: { name: 'Grill Cook', hire: 120, wage: 45, shirt: 0xffffff, hat: true, desc: 'Works the parrilla', soon: true },
+};
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
 const menu = () => Object.keys(FOODS).filter(d => d !== 'bife' || has('menu'));
-const patienceMult = () => (has('interior') ? 1.3 : 1);
-const spawnGap = () => Math.max(7, 30 - day * 4) + Math.random() * 8; // guests arrive faster every day
+const patienceMult = () => (has('interior') ? 1.3 : 1) * dayCfg().patience;
 
 // ---------- State ----------
 let money = 0;
 let held = null;          // { kind: 'crate' | 'whole' | 'portion' | 'cooked', type, q, mesh, qs }
 const grillFood = [];     // { type, q, t, mesh, slot, bar }
-const customers = [];
-const queue = [];
-let spawnTimer = 2;
+const customers = [];     // party leaders (party members follow them)
+const queue = [], payQueue = []; // ordering line at the counter, payment line at the register
 let msgTimer = 0;
 let day = 1, isOpen = false, dayDone = false, everOpened = false, warnedClosing = false, clockMin = DAY_START;
+let sinceArrival = 0, busySpell = 0, rushShown = '';             // demand model
 const stock = Object.fromEntries(ITEM_KEYS.map(k => [k, []])); // cold storage: one quality level per unit
 const trays = { filet: [], vacio: [] };                          // cut portions waiting at the prep station
 const crates = [];                                               // crates standing in the delivery area
 let delivery = null;                                             // wholesale order on its way: { t, list }
-let busy = null;                                                 // cutting in progress at the prep station
-let uiMode = null, summaryTimer = 0;                             // uiMode: 'os' | 'summary'
-let today = { revenue: 0, food: 0, staff: 0, upgrades: 0 };
+let busy = null;                                                 // a timed hands action (cutting) in progress
+let uiMode = null, summaryTimer = 0;                             // uiMode: 'os' | 'summary' | 'pos'
+let drawer = FLOAT;                                              // cash in the register drawer
+const transactions = [];                                         // completed payments
+const newDay = () => ({ sales: 0, tips: 0, card: 0, cash: 0, food: 0, staff: 0, upgrades: 0, guests: 0, lost: 0, deposit: 0 });
+let today = newDay();
 const history = [];
 
 // ---------- Renderer / scene ----------
@@ -372,24 +405,29 @@ const clothTex = (() => {
 })();
 const clothMat = new THREE.MeshStandardMaterial({ map: clothTex, roughness: 0.95 });
 const plateGeo = new THREE.CylinderGeometry(0.15, 0.12, 0.012, 16), plateMat = mat(0xf4f4f0);
+// 4 seats per table; guests face the table. Each seat knows its spot, facing, approach lane and plate spot.
+const SEATS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+const tableWood = mat(0x5a3a1a), chairMat = mat(0x6b4423);
 const tables = [
   { x: 0, z: 0.5 }, { x: 4, z: 0.5 }, { x: 0, z: 3.8 }, { x: 4, z: 3.8 },
 ].map((t, i) => {
   const g = new THREE.Group();
   g.position.set(t.x, 0, t.z);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 1.2), clothMat);
-  top.position.y = 0.75;
-  const leg = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.75, 0.15), mat(0x5a3a1a));
-  leg.position.y = 0.37;
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.5), mat(0x6b4423));
-  seat.position.set(-1, 0.45, 0);
-  const back = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.6, 0.5), mat(0x6b4423));
-  back.position.set(-1.25, 0.75, 0);
-  const cleg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.45, 0.1), mat(0x5a3a1a));
-  cleg.position.set(-1, 0.22, 0);
-  const plate = new THREE.Mesh(plateGeo, plateMat);
-  plate.position.set(-0.3, 0.797, 0);
-  g.add(top, leg, seat, back, cleg, plate);
+  part(new THREE.BoxGeometry(1.2, 0.08, 1.2), clothMat, 0, 0.75, 0, g);
+  part(new THREE.BoxGeometry(0.15, 0.75, 0.15), tableWood, 0, 0.37, 0, g);
+  const seats = SEATS.map(([dx, dz]) => {
+    const rot = Math.atan2(-dx, -dz), ch = new THREE.Group();
+    ch.position.set(dx, 0, dz);
+    ch.rotation.y = rot;
+    part(new THREE.BoxGeometry(0.5, 0.08, 0.5), chairMat, 0, 0.45, 0, ch);
+    part(new THREE.BoxGeometry(0.5, 0.6, 0.08), chairMat, 0, 0.75, -0.25, ch);
+    part(new THREE.BoxGeometry(0.1, 0.45, 0.1), tableWood, 0, 0.22, 0, ch);
+    g.add(ch);
+    part(plateGeo, plateMat, dx * 0.3, 0.797, dz * 0.3, g);
+    const lane = dx ? t.x + dx * 1.6 : t.x - 1.6; // guests walk in beside the table, never through it
+    return { pos: new THREE.Vector3(t.x + dx, 0, t.z + dz), rot, lane: new THREE.Vector3(lane, 0, t.z + dz),
+      plate: new THREE.Vector3(t.x + dx * 0.3, 0.82, t.z + dz * 0.3), side: new THREE.Vector3(-dz, 0, dx) };
+  });
   g.traverse(o => { o.castShadow = o.receiveShadow = true; });
   const label = makeLabel(String(i + 1), 0.3);
   label.position.set(0, 1.2, 0);
@@ -398,7 +436,7 @@ const tables = [
   scene.add(g);
   const col = { minX: t.x - 0.6, maxX: t.x + 0.6, minZ: t.z - 0.6, maxZ: t.z + 0.6, on: i < 3 };
   colliders.push(col);
-  const table = { n: i + 1, x: t.x, z: t.z, group: g, col, customer: null, active: i < 3, seat: new THREE.Vector3(t.x - 1, 0, t.z) };
+  const table = { n: i + 1, x: t.x, z: t.z, group: g, col, customer: null, active: i < 3, seats };
   g.userData.ref = table;
   g.visible = table.active;
   return table;
@@ -614,25 +652,34 @@ function poseCustomer(c, dt) {
   r.arms.forEach((a, i) => { a.rotation.x = sitting ? -0.7 : (i ? s : -s) * 0.8; });
   if (c.state === 'eat' || c.state === 'prep') r.arms[1].rotation.x = -1.3 + Math.sin(r.t * 6) * 0.35;
 }
-function spawnCustomer() {
+const MEMBER_OFFSETS = [[0, 0], [0.55, 0], [-0.55, 0], [0, 0.55]]; // where party members stand next to their leader
+function spawnParty() { // a party walks in together; the leader orders and pays for the table
   const free = tables.filter(t => t.active && !t.customer);
-  if (!free.length) return;
-  const table = free[Math.floor(Math.random() * free.length)];
-  const rig = makePerson();
-  const g = rig.root;
-  g.position.copy(OUTSIDE);
-  const bar = makeBar();
+  if (!free.length) return false;
+  const table = pick(free), size = pick(dayCfg().party);
+  const person = i => {
+    const rig = makePerson();
+    rig.root.position.set(OUTSIDE.x + MEMBER_OFFSETS[i][0], 0, OUTSIDE.z + i * 0.7);
+    scene.add(rig.root);
+    return rig;
+  };
+  const rig = person(0), g = rig.root, bar = makeBar(), pat = gm(PATIENCE.queue) * patienceMult();
   bar.position.y = 2.0;
   g.add(bar);
   const c = {
-    group: g, bar, table, state: 'enter', path: [DOOR_IN.clone()],
-    items: null, foods: [], patience: QUEUE_PATIENCE * patienceMult(), maxPatience: QUEUE_PATIENCE * patienceMult(),
-    orderedAt: 0, bubble: null, eatT: 0, tipP: 1, rig,
+    group: g, bar, table, rig, state: 'enter', path: [DOOR_IN.clone()], members: [], items: null, foods: [],
+    patience: pat, maxPatience: pat, orderedAt: 0, bubble: null, eatT: 0, tipP: 1, pay: null, missedSauce: false,
   };
+  for (let i = 1; i < size; i++) {
+    const r = person(i);
+    r.root.userData = { kind: 'customer', ref: c };
+    c.members.push({ rig: r, group: r.root, seatI: i, state: 'enter', path: [DOOR_IN.clone().add(new THREE.Vector3(MEMBER_OFFSETS[i][0], 0, 0.6 * i))] });
+  }
   g.userData = { kind: 'customer', ref: c };
   table.customer = c;
   customers.push(c);
-  scene.add(g);
+  today.guests += size;
+  return true;
 }
 
 function setBubble(c, text) {
@@ -644,21 +691,26 @@ function setBubble(c, text) {
   c.group.add(c.bubble);
 }
 
+function sit(group, seat) { group.position.set(seat.pos.x, -0.2, seat.pos.z); group.rotation.y = seat.rot; }
+const seatPath = st => [new THREE.Vector3(st.lane.x, 0, -1), st.lane.clone(), st.pos.clone()];
+
 function takeOrder(c) {
   queue.shift();
-  const items = makeOrder();
+  const items = makeOrder(1 + c.members.length);
   if (!items.length) {
     leave(c, false);
     setBubble(c, 'No food?');
+    today.lost += 1 + c.members.length;
     toast('Out of stock! Store your crates or buy food at the office terminal.', '#f66', 4);
     sfx.bad();
     return;
   }
   c.items = items;
+  c.missedSauce = !!items.missedSauce;
   c.state = 'toTable';
   c.orderedAt = performance.now();
-  c.path = [new THREE.Vector3(c.table.seat.x, 0, -1), c.table.seat.clone()];
-  setBubble(c, orderText(items));
+  c.path = seatPath(c.table.seats[0]);
+  c.members.forEach(m => { m.state = 'toTable'; m.path = seatPath(c.table.seats[m.seatI]); });
   toast(`Order: ${orderText(items).replace(/\n/g, ', ')} → Mesa ${c.table.n}`);
   beep(880, 0.08);
 }
@@ -666,78 +718,147 @@ function takeOrder(c) {
 // what can still be served: stock (whole cuts count their portions), cut portions, grill and hands, minus open orders
 function availability() {
   const per = portionsPer(), a = Object.fromEntries(Object.keys(FOODS).map(d => [d, 0]));
-  for (const k of ITEM_KEYS) a[ITEMS[k].dish] += stock[k].length * (ITEMS[k].whole ? per : 1);
+  for (const k of ITEM_KEYS) if (ITEMS[k].dish) a[ITEMS[k].dish] += stock[k].length * (ITEMS[k].whole ? per : 1);
   for (const d in trays) a[d] += trays[d].length;
   grillFood.forEach(f => { if (foodState(f) !== 'burnt') a[f.type]++; });
   if (held?.kind === 'whole') a[ITEMS[held.type].dish] += per;
-  else if (held && held.kind !== 'crate') a[held.type]++;
-  if (busy) a[ITEMS[busy.whole.type].dish] += per;
-  if (cook?.carry) a[ITEMS[cook.carry.type].dish] += per;
+  else if (held?.kind === 'portion' || held?.kind === 'cooked') a[held.type]++;
+  if (busy?.whole) a[ITEMS[busy.whole.type].dish] += per;
+  staff.forEach(e => { if (e.carry && ITEMS[e.carry.type]?.whole) a[ITEMS[e.carry.type].dish] += per; });
   customers.forEach(c => c.items && c.state !== 'exit' && c.items.forEach(i => { if (!i.served) a[i.dish]--; }));
   return a;
 }
-function makeOrder() { // day 1: one dish per guest, bigger orders later
-  const a = availability(), items = [], r = Math.random();
-  for (let n = day === 1 ? 1 : day < 4 ? (r < 0.35 ? 2 : 1) : (r < 0.25 ? 3 : r < 0.6 ? 2 : 1); n > 0; n--) {
-    const opts = menu().filter(d => a[d] > 0);
-    if (!opts.length) break;
+let sauceAvail = () => 0; // sauces become available once there is a sauce station
+function pickSauce(d, cfg) {
+  if (Math.random() >= cfg.sauce) return null;
+  const opts = cfg.sauces.filter(x => SAUCES[x].dishes.includes(d));
+  if (!opts.length) return null;
+  const ok = opts.filter(x => sauceAvail(x) > 0);
+  return ok.length ? pick(ok) : 'missing';
+}
+function makeOrder(size) { // one dish per guest (mostly mains), sometimes shared starters and sauces
+  const cfg = dayCfg(), a = availability(), m = menu(), items = [];
+  let missed = false;
+  const take = pool => {
+    const opts = pool.filter(d => m.includes(d) && a[d] > 0);
+    if (!opts.length) return null;
     const d = pick(opts);
     a[d]--;
-    items.push({ dish: d, served: false, q: 0 });
+    return d;
+  };
+  const add = (d, seat) => {
+    let sauce = pickSauce(d, cfg);
+    if (sauce === 'missing') { missed = true; sauce = null; }
+    items.push({ dish: d, sauce, served: false, sauced: false, q: 0, seat });
+  };
+  for (let g = 0; g < size; g++) {
+    const d = (Math.random() < 0.7 && take(MAINS)) || take(m);
+    if (d) add(d, g);
   }
+  for (let k = 0; k < Math.ceil(size / 2); k++) {
+    const d = Math.random() < cfg.extra && take(STARTERS);
+    if (d) items.push({ dish: d, sauce: null, served: false, sauced: false, q: 0, seat: k });
+  }
+  items.missedSauce = missed;
   return items;
 }
-function orderText(items) { // unserved dishes, one line each
+function orderText(items) { // what the table is still missing, one line per dish (+ sauce)
   const n = {};
-  items.forEach(i => { if (!i.served) n[i.dish] = (n[i.dish] || 0) + 1; });
-  return Object.entries(n).map(([d, k]) => (k > 1 ? `${k}× ` : '') + FOODS[d].name).join('\n');
+  for (const i of items) {
+    if (i.served && (!i.sauce || i.sauced)) continue;
+    const k = i.dish + (i.sauce ? '+' + i.sauce : '');
+    n[k] = (n[k] || 0) + 1;
+  }
+  return Object.entries(n).map(([k, cnt]) => {
+    const [d, sc] = k.split('+');
+    return (cnt > 1 ? `${cnt}× ` : '') + FOODS[d].name + (sc ? ` + ${SAUCES[sc].name}` : '');
+  }).join('\n');
 }
 
-function serve(c, i) {
-  const m = held.mesh, k = c.items.filter(it => it.served).length, z = c.table.z + [0, 0.3, -0.3][k % 3];
-  c.items[i].served = true;
-  c.items[i].q = held.q;
-  dropHeld();
-  m.position.set(c.table.x - 0.3, 0.82, z);
-  scene.add(m);
-  c.foods.push(m);
-  if (k) { // extra dishes get their own plate
-    const p = new THREE.Mesh(plateGeo, plateMat);
-    p.position.set(c.table.x - 0.3, 0.797, z);
-    scene.add(p);
-    c.foods.push(p);
+const complete = c => c.items.every(i => i.served && (!i.sauce || i.sauced));
+function serve(c, i, plate) { // plate: { type, q, mesh } from the player's hands (or a server)
+  const it = c.items[i], seat = c.table.seats[it.seat % 4];
+  const k = c.items.filter(x => x !== it && x.served && x.seat % 4 === it.seat % 4).length;
+  it.served = true;
+  it.q = plate.q;
+  const p = seat.plate.clone().addScaledVector(seat.side, [0, 0.27, -0.27][k % 3]);
+  plate.mesh.position.copy(p);
+  plate.mesh.rotation.set(0, 0, 0);
+  scene.add(plate.mesh);
+  c.foods.push(plate.mesh);
+  if (k) { // a second dish at the same seat gets its own plate
+    const pl = new THREE.Mesh(plateGeo, plateMat);
+    pl.position.set(p.x, 0.797, p.z);
+    scene.add(pl);
+    c.foods.push(pl);
   }
   sfx.serve();
-  if (c.items.every(it => it.served)) {
-    c.tipP = c.patience / c.maxPatience;
-    c.state = 'eat';
-    c.eatT = EAT_TIME;
-    setBubble(c, null);
-  } else setBubble(c, orderText(c.items));
+  if (complete(c)) { c.tipP = c.patience / c.maxPatience; c.state = 'eat'; c.eatT = gm(EAT_MIN); }
 }
 
-function payFor(c) { // price × meat quality, plus a tip for quality and speed
-  let total = 0, qs = 0;
-  for (const it of c.items) { total += Math.round(FOODS[it.dish].price * QUALITY[it.q].price); qs += it.q + 1; }
-  const tip = Math.round(total * 0.05 * (qs / c.items.length) * c.tipP * (has('interior') ? 1.5 : 1));
-  money += total + tip;
-  today.revenue += total + tip;
-  toast(`+${fmtMoney(total + tip)}${tip ? ` (incl. ${fmtMoney(tip)} tip)` : ''}`, '#ffd76a');
-  sfx.pay();
+function billLines(c) { // receipt lines: dishes (by meat quality) and sauce cups
+  const lines = {};
+  for (const it of c.items) {
+    if (!it.served) continue;
+    const key = it.dish + it.q;
+    (lines[key] ||= { name: FOODS[it.dish].name + (it.q ? ` ${QUALITY[it.q].name}` : ''), qty: 0, each: Math.round(FOODS[it.dish].price * QUALITY[it.q].price) }).qty++;
+    if (it.sauce && it.sauced) (lines[it.sauce] ||= { name: SAUCES[it.sauce].name, qty: 0, each: SAUCES[it.sauce].price }).qty++;
+  }
+  return Object.values(lines);
 }
-
-function leave(c, angry) {
-  c.state = 'exit';
+const billTotal = c => billLines(c).reduce((n, l) => n + l.qty * l.each, 0);
+function tipPct(c) { // happier guests tip more: quick service, better meat, a nicer room, no missing sauce
+  const q = c.items.reduce((n, i) => n + i.q, 0) / c.items.length;
+  const sat = 0.15 + 0.6 * c.tipP + 0.12 * q + (has('interior') ? 0.15 : 0) - (c.missedSauce ? 0.2 : 0);
+  return sat > 0.8 ? 15 : sat > 0.6 ? 10 : sat > 0.4 ? 5 : 0;
+}
+function goPay(c) { // the party gets up: the guests head out, the leader queues at the register
+  const total = billTotal(c);
+  c.pay = Math.random() < dayCfg().cash
+    ? { method: 'cash', tender: Math.random() < 0.2 ? total : [20, 50, 100].find(b => b >= total) || Math.ceil(total / 50) * 50 }
+    : { method: 'card' };
+  c.state = 'toPay';
   c.group.position.y = 0;
-  c.table.customer = null;
-  const qi = queue.indexOf(c);
-  if (qi >= 0) queue.splice(qi, 1);
-  c.path = [DOOR_IN.clone(), OUTSIDE.clone()];
+  const lane = c.table.seats[0].lane;
+  c.path = [lane.clone(), new THREE.Vector3(lane.x, 0, -1), REGISTER_SPOT.clone().add(new THREE.Vector3(0, 0, payQueue.length * 0.9))];
+  payQueue.push(c);
+  c.patience = c.maxPatience = gm(PATIENCE.pay) * patienceMult();
   c.foods.forEach(m => scene.remove(m));
   c.foods = [];
+  c.table.customer = null; // the table is free for the next party
+  c.members.forEach(m => memberExit(m, c));
+  pos.dirty = true;
+}
+function completePayment(c, method, tip) {
+  const total = billTotal(c);
+  if (method === 'cash') { drawer += total + tip; today.cash += total; } else { money += total + tip; today.card += total; }
+  today.sales += total;
+  today.tips += tip;
+  transactions.push({ day, table: c.table.n, method, total, tip, time: clockMin });
+  toast(`Paid ${fmtMoney(total)} by ${method}${tip ? ` + ${fmtMoney(tip)} tip` : ''}`, '#ffd76a');
+  sfx.pay();
+  leave(c, false);
+}
+function memberExit(m, c) {
+  const seated = m.state === 'wait' || m.state === 'eat';
+  m.state = 'exit';
+  m.group.position.y = 0;
+  m.path = seated ? [c.table.seats[m.seatI].lane.clone(), DOOR_IN.clone(), OUTSIDE.clone()] : [DOOR_IN.clone(), OUTSIDE.clone()];
+}
+function leave(c, angry) {
+  const seated = c.state === 'wait' || c.state === 'eat';
+  c.state = 'exit';
+  c.group.position.y = 0;
+  if (c.table.customer === c) c.table.customer = null;
+  for (const q of [queue, payQueue]) { const i = q.indexOf(c); if (i >= 0) q.splice(i, 1); }
+  c.path = seated ? [c.table.seats[0].lane.clone(), DOOR_IN.clone(), OUTSIDE.clone()] : [DOOR_IN.clone(), OUTSIDE.clone()];
+  c.foods.forEach(m => scene.remove(m));
+  c.foods = [];
+  c.members.forEach(m => { if (m.state !== 'exit') memberExit(m, c); });
   setBubble(c, angry ? '>:(' : null);
   c.bar.visible = false;
-  if (angry) { toast('A guest left angry!', '#f66'); sfx.bad(); }
+  if (angry) { today.lost += 1 + c.members.length; toast('A guest left angry!', '#f66'); sfx.bad(); }
+  pos.dirty = true;
 }
 
 function stepPath(o, dt) { // walk a person along its path; true once arrived
@@ -751,11 +872,9 @@ function stepPath(o, dt) { // walk a person along its path; true once arrived
 }
 
 function updateCustomer(c, dt) {
-  // queue slot follows queue order
-  if (c.state === 'queue' || c.state === 'order') {
-    const i = queue.indexOf(c);
-    c.path = [COUNTER_SPOT.clone().add(new THREE.Vector3(0, 0, i * 0.9))];
-  }
+  const slot = (spot, q, step) => [spot.clone().add(new THREE.Vector3(0, 0, q.indexOf(c) * step))];
+  if (c.state === 'queue' || c.state === 'order') c.path = slot(COUNTER_SPOT, queue, 1.1);
+  if (c.state === 'payLine' || c.state === 'paying') c.path = slot(REGISTER_SPOT, payQueue, 0.9);
   const arrived = stepPath(c, dt);
 
   switch (c.state) {
@@ -768,31 +887,51 @@ function updateCustomer(c, dt) {
     case 'toTable':
       if (arrived) {
         c.state = 'wait';
-        c.group.position.y = -0.2;
-        c.group.rotation.y = Math.PI / 2;
-        c.patience = c.maxPatience = WAIT_PATIENCE * patienceMult() * (1 + 0.25 * (c.items.length - 1));
+        sit(c.group, c.table.seats[0]);
+        setBubble(c, null);
+        c.patience = c.maxPatience = gm(PATIENCE.wait + PATIENCE.perDish * (c.items.length - 1)) * patienceMult();
       }
       break;
     case 'eat':
-      c.eatT -= dt;
-      if (c.eatT <= 0) {
-        payFor(c);
-        leave(c, false);
+      if ((c.eatT -= dt) <= 0) goPay(c);
+      break;
+    case 'toPay':
+      if (arrived) c.state = 'payLine';
+      break;
+    case 'payLine':
+      if (arrived && payQueue[0] === c) {
+        c.state = 'paying';
+        c.group.rotation.y = Math.PI;
+        setBubble(c, c.pay.method === 'card' ? 'CARD' : `CASH ${fmtMoney(c.pay.tender)}`);
+        pos.dirty = true;
       }
       break;
     case 'exit':
-      if (arrived) { scene.remove(c.group); customers.splice(customers.indexOf(c), 1); }
+      if (arrived && c.members.every(m => !m.path.length)) {
+        scene.remove(c.group);
+        c.members.forEach(m => scene.remove(m.group));
+        customers.splice(customers.indexOf(c), 1);
+      }
       break;
   }
+  c.members.forEach(m => { // party members follow their leader
+    const o = MEMBER_OFFSETS[m.seatI];
+    if (c.state === 'queue' || c.state === 'order') m.path = [COUNTER_SPOT.clone().add(new THREE.Vector3(o[0], 0, queue.indexOf(c) * 1.1 + o[1]))];
+    if (stepPath(m, dt) && m.state === 'toTable') { m.state = 'wait'; sit(m.group, c.table.seats[m.seatI]); }
+    if (m.state === 'wait' && c.state === 'eat') m.state = 'eat';
+    poseCustomer(m, dt);
+  });
 
-  if (['queue', 'order', 'wait'].includes(c.state)) {
+  if (['queue', 'order', 'wait', 'payLine', 'paying'].includes(c.state)) {
     c.patience -= dt;
     const p = c.patience / c.maxPatience;
     setBar(c.bar, p, p > 0.5 ? 0x44dd44 : p > 0.25 ? 0xffcc33 : 0xff4444);
-    if (c.patience <= 0) leave(c, true);
-  } else if (c.state !== 'exit') {
-    setBar(c.bar, 1, 0x44dd44);
-  }
+    if (c.patience <= 0) {
+      const unpaid = c.state === 'payLine' || c.state === 'paying';
+      leave(c, true);
+      if (unpaid) toast('A guest walked out without paying!', '#f66', 3);
+    }
+  } else if (c.state !== 'exit') setBar(c.bar, 1, 0x44dd44);
   poseCustomer(c, dt);
 }
 
@@ -1055,75 +1194,111 @@ function updateBusy(dt) {
   busy = null;
 }
 
-// ---------- Prep cook: wait → check for a prep task → fetch → prepare → return ----------
-let cook = null;
-const COOK_HOME = new THREE.Vector3(2.2, 0, -8.8), PREP_FRONT = new THREE.Vector3(4.2, 0, -7.35);
-function hireCook() {
-  const rig = makePerson(0xffffff);
-  part(new THREE.CylinderGeometry(0.14, 0.12, 0.2, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true }), 0, 1.86, 0, rig.body); // chef hat
-  cook = { rig, group: rig.root, state: 'idle', path: [], t: 1, task: null, carry: null };
-  cook.group.position.copy(COOK_HOME);
-  scene.add(cook.group);
+// ---------- Staff: role-based employees (hire cost, daily wage, a small state machine per role) ----------
+const staff = [];
+const STAFF_HOME = { prep: new THREE.Vector3(2.2, 0, -8.8), server: new THREE.Vector3(2, 0, -2.7), grill: new THREE.Vector3(5, 0, -4.2) };
+const hired = role => staff.some(e => e.role === role);
+const wages = () => staff.reduce((n, e) => n + ROLES[e.role].wage, 0);
+function hire(role) {
+  const R = ROLES[role], rig = makePerson(R.shirt);
+  if (R.hat) part(new THREE.CylinderGeometry(0.14, 0.12, 0.2, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true }), 0, 1.86, 0, rig.body); // chef hat
+  const e = { role, rig, group: rig.root, state: 'idle', path: [], t: 1, task: null, carry: null };
+  e.group.position.copy(STAFF_HOME[role]);
+  scene.add(e.group);
+  staff.push(e);
+  return e;
 }
-function updateCook(dt) {
-  const c = cook, arrived = stepPath(c, dt);
-  if (c.state === 'idle' && (c.t -= dt) <= 0) {
-    c.task = ['filet', 'vacio'].find(d => trays[d].length < 4 && stock[d + '_whole'].length);
-    if (c.task) { c.state = 'fetch'; c.path = [new THREE.Vector3(bins[ITEM_KEYS.indexOf(c.task + '_whole')].x, 0, -10.6)]; } else c.t = 1;
-  } else if (c.state === 'fetch' && arrived) {
-    const it = c.task + '_whole';
-    if (stock[it].length) {
-      c.carry = { type: it, q: stock[it].shift(), mesh: makeItemMesh(it) };
-      c.carry.mesh.position.set(0, 1.05, 0.3);
-      c.rig.body.add(c.carry.mesh);
-      refreshStorage();
-      c.state = 'toPrep';
-      c.path = [PREP_FRONT.clone()];
-    } else { c.state = 'back'; c.path = [COOK_HOME.clone()]; }
-  } else if (c.state === 'toPrep' && arrived) {
-    c.state = 'prep';
-    c.t = has('prep') ? 2 : 4;
-    c.group.rotation.y = 0;
-  } else if (c.state === 'prep' && (c.t -= dt) <= 0) {
-    for (let i = portionsPer(); i > 0; i--) trays[c.task].push(c.carry.q);
-    c.rig.body.remove(c.carry.mesh);
-    c.carry = null;
-    refreshTrays();
-    c.state = 'back';
-    c.path = [COOK_HOME.clone()];
-  } else if (c.state === 'back' && arrived) { c.state = 'idle'; c.t = 2; }
-  poseCustomer(c, dt);
+const PREP_FRONT = new THREE.Vector3(4.2, 0, -7.35);
+const STAFF_AI = {
+  prep(e, dt) { // wait → check for a prep task → fetch the whole cut → cut it → return
+    const arrived = stepPath(e, dt);
+    if (e.state === 'idle' && (e.t -= dt) <= 0) {
+      e.task = ['filet', 'vacio'].find(d => trays[d].length < 4 && stock[d + '_whole'].length);
+      if (e.task) { e.state = 'fetch'; e.path = [new THREE.Vector3(bins[ITEM_KEYS.indexOf(e.task + '_whole')].x, 0, -10.6)]; } else e.t = 1;
+    } else if (e.state === 'fetch' && arrived) {
+      const it = e.task + '_whole';
+      if (stock[it].length) {
+        e.carry = { type: it, q: stock[it].shift(), mesh: makeItemMesh(it) };
+        e.carry.mesh.position.set(0, 1.05, 0.3);
+        e.rig.body.add(e.carry.mesh);
+        refreshStorage();
+        e.state = 'toPrep';
+        e.path = [PREP_FRONT.clone()];
+      } else { e.state = 'back'; e.path = [STAFF_HOME.prep.clone()]; }
+    } else if (e.state === 'toPrep' && arrived) {
+      e.state = 'prep';
+      e.t = has('prep') ? 2 : 4;
+      e.group.rotation.y = 0;
+    } else if (e.state === 'prep' && (e.t -= dt) <= 0) {
+      for (let i = portionsPer(); i > 0; i--) trays[e.task].push(e.carry.q);
+      e.rig.body.remove(e.carry.mesh);
+      e.carry = null;
+      refreshTrays();
+      e.state = 'back';
+      e.path = [STAFF_HOME.prep.clone()];
+    } else if (e.state === 'back' && arrived) { e.state = 'idle'; e.t = 2; }
+  },
+};
+function updateStaff(dt) {
+  for (const e of staff) {
+    STAFF_AI[e.role](e, dt);
+    poseCustomer(e, dt);
+  }
 }
 
 // ---------- Day cycle ----------
 function openRestaurant() {
   isOpen = true; everOpened = true; warnedClosing = false;
   clockMin = OPEN_AT;
-  spawnTimer = 3;
+  sinceArrival = 60; // the first party shows up within a few minutes
+  busySpell = 0;
   sfx.sign();
   sfx.door();
   toast('Restaurant OPEN! Guests are on their way.', '#9f6', 3);
 }
-function closeRestaurant() { // guests who are eating pay, everyone else leaves; wages are paid
+const rushNow = () => isOpen && RUSHES.find(r => clockMin / 60 >= r.from && clockMin / 60 < r.to);
+function demandRate() { // parties per game hour right now
+  const cfg = dayCfg(), h = clockMin / 60, rush = rushNow();
+  return cfg.rate * (rush ? cfg.rush : h >= 15 && h < 18 ? 0.6 : 1) * (busySpell > 0 ? 1.5 : 1);
+}
+function updateDemand(dt) { // random arrivals: rushes, a quiet afternoon, occasional busy spells; never too close or too far apart
+  const mins = dt * TIME_SCALE, rush = rushNow();
+  if (rush && rushShown !== rush.name + day) { rushShown = rush.name + day; toast(`${rush.name}!`, '#ffb347', 3); }
+  if (busySpell > 0) busySpell -= mins;
+  else if (day > 1 && Math.random() < 0.12 * mins / 60) { busySpell = 40; toast('Busy spell: more guests are coming in!', '#ffb347', 3); }
+  sinceArrival += mins;
+  if (sinceArrival > 8 && (Math.random() < demandRate() * mins / 60 || sinceArrival > 70) && spawnParty()) sinceArrival = 0;
+}
+function closeRestaurant() { // parties eating or waiting to pay settle up, everyone else goes home; wages and banking
   isOpen = false;
   dayDone = true;
   for (const c of [...customers]) {
-    if (c.state === 'eat') { payFor(c); leave(c, false); } else if (c.state !== 'exit') leave(c, false);
+    if (['eat', 'toPay', 'payLine', 'paying'].includes(c.state)) completePayment(c, 'card', 0);
+    else if (c.state !== 'exit') leave(c, false);
   }
-  queue.length = 0;
+  queue.length = payQueue.length = 0;
   [...grillFood].forEach(removeGrillFood);
-  if (has('cook')) { money -= COOK_WAGE; today.staff += COOK_WAGE; }
+  const w = wages();
+  money -= w;
+  today.staff += w;
+  today.deposit = drawer - FLOAT; // the day's cash goes to the bank, the float stays in the drawer
+  money += today.deposit;
+  drawer = FLOAT;
+  if (uiMode === 'pos') posExit();
   sfx.sign();
   toast('Restaurant CLOSED', '#ffb347', 3);
   summaryTimer = 1.4; // let the sign turn back before the summary
 }
+const revenue = t => t.sales + t.tips;
+const profitOf = t => revenue(t) - t.food - t.staff - t.upgrades;
 function showSummary() {
-  const profit = today.revenue - today.food - today.staff - today.upgrades;
-  history.push({ day, ...today, profit });
+  const profit = profitOf(today);
+  history.push({ day, ...today, revenue: revenue(today), profit });
   const row = (a, v) => `<tr><td>${a}</td><td class="num">${fmtMoney(v)}</td></tr>`;
   sumEl.innerHTML = `<div class="win"><div class="bar"><span>DAY ${day} COMPLETE</span><span>ASADO OS</span></div><div class="pane"><table>
-    ${row('Revenue', today.revenue)}${row('Food cost', -today.food)}${row('Staff cost', -today.staff)}${row('Upgrade cost', -today.upgrades)}
+    ${row('Sales', today.sales)}${row('Tips', today.tips)}${row('Food cost', -today.food)}${row('Staff cost', -today.staff)}${row('Upgrade cost', -today.upgrades)}
     <tr><td class="big">PROFIT</td><td class="num big ${profit < 0 ? 'neg' : 'pos'}">${fmtMoney(profit)}</td></tr></table>
+    <p class="muted">${today.guests} guests · ${today.lost} lost · card ${fmtMoney(today.card)} · cash ${fmtMoney(today.cash)} · ${fmtMoney(today.deposit)} cash banked, the ${fmtMoney(FLOAT)} float stays in the drawer</p>
     <div class="foot"><span class="muted">Money: ${fmtMoney(money)} · Restock at the office terminal before you open tomorrow</span>
     <button data-a="next">CONTINUE TO NEXT DAY</button></div></div></div>`;
   uiMode = 'summary';
@@ -1134,12 +1309,12 @@ function nextDay() {
   day++;
   dayDone = false;
   clockMin = DAY_START;
-  today = { revenue: 0, food: 0, staff: 0, upgrades: 0 };
+  today = newDay();
   closeUI();
   toast(`DAY ${day}: restock at the office terminal, then open the restaurant`, '#ffd76a', 5);
 }
 
-// ---------- ASADO OS: office terminal (upgrades, wholesale, finances) ----------
+// ---------- ASADO OS: office terminal (upgrades + staff, wholesale, finances) ----------
 const osEl = document.getElementById('os'), sumEl = document.getElementById('summary');
 let osTab = 'upgrades', osMsg = '', wsQ = 0;
 const wsQty = Object.fromEntries(ITEM_KEYS.map(k => [k, 0]));
@@ -1171,6 +1346,11 @@ function renderOS() {
       const lv = u.cost.length > 1 ? ` <span class="muted">level ${u.level}/${u.cost.length}</span>` : '';
       return `${head}<tr><td>${u.name}${lv}<br><span class="muted">${u.desc}</span></td><td class="num">${max ? 'OWNED' : fmtMoney(cost)}</td>
         <td class="num">${max ? '' : `<button data-a="buy" data-v="${u.id}"${money < cost ? ' disabled' : ''}>BUY</button>`}</td></tr>`;
+    }).join('') + '<tr><td class="cat" colspan="3">STAFF</td></tr>' + Object.entries(ROLES).map(([id, r]) => {
+      const got = hired(id);
+      return `<tr><td>${r.name} <span class="muted">${fmtMoney(r.wage)}/day wage</span><br><span class="muted">${r.desc}</span></td>
+        <td class="num">${r.soon ? 'COMING SOON' : got ? 'HIRED' : fmtMoney(r.hire)}</td>
+        <td class="num">${r.soon || got ? '' : `<button data-a="hire" data-v="${id}"${money < r.hire ? ' disabled' : ''}>HIRE</button>`}</td></tr>`;
     }).join('') + '</table>';
   } else if (osTab === 'wholesale') {
     const units = wsItems().reduce((n, k) => n + wsQty[k] * ITEMS[k].pack, 0);
@@ -1179,19 +1359,21 @@ function renderOS() {
     const qBtns = QUALITY.map((q, i) => `<button data-a="q" data-v="${i}" class="${wsQ === i ? 'on' : ''}"${i > lvl('quality') ? ' disabled' : ''}>${q.name}</button>`).join(' ');
     body = `<p class="muted">MEAT QUALITY ${qBtns}</p>
       <table><tr><th>ITEM</th><th>PACK</th><th class="num">PRICE</th><th class="num">QUANTITY</th><th class="num">TOTAL</th></tr>
-      ${wsItems().map(k => `<tr><td>${ITEMS[k].name}</td><td class="muted">${ITEMS[k].whole ? `whole · ${portionsPer()} portions` : `${ITEMS[k].pack} pieces`}</td>
+      ${wsItems().map(k => `<tr><td>${ITEMS[k].name}</td><td class="muted">${ITEMS[k].whole ? `whole · ${portionsPer()} portions` : ITEMS[k].cups ? `${ITEMS[k].pack} bottles · ${ITEMS[k].cups} cups each` : `${ITEMS[k].pack} pieces`}</td>
         <td class="num">${fmtMoney(packCost(k, wsQ))}</td>
         <td class="num"><button data-a="qty" data-v="${k}" data-d="-1">−</button> ${wsQty[k]} <button data-a="qty" data-v="${k}" data-d="1">+</button></td>
         <td class="num">${fmtMoney(wsQty[k] * packCost(k, wsQ))}</td></tr>`).join('')}</table>
       <div class="foot"><span class="muted">Uses ${units} of ${free} free storage spaces · Money ${fmtMoney(money)}</span>
         <span>TOTAL <b class="big">${fmtMoney(total)}</b> <button data-a="order"${!units || total > money || units > free ? ' disabled' : ''}>ORDER</button></span></div>`;
   } else {
-    const profit = today.revenue - today.food - today.staff - today.upgrades;
-    const rows = [['Current money', money], ["Today's revenue", today.revenue], ['Food cost', -today.food], ['Staff cost', -today.staff], ['Upgrade cost', -today.upgrades]];
+    const profit = profitOf(today);
+    const rows = [['Money in the bank', money], ['Cash in the register', drawer], ["Today's sales", today.sales], ['· by card', today.card], ['· in cash', today.cash],
+      ['Tips', today.tips], ['Food cost', -today.food], ['Staff cost', -today.staff], ['Upgrade cost', -today.upgrades]];
     body = `<table>${rows.map(([a, v]) => `<tr><td>${a}</td><td class="num">${fmtMoney(v)}</td></tr>`).join('')}
       <tr><td class="big">Today's profit</td><td class="num big ${profit < 0 ? 'neg' : 'pos'}">${fmtMoney(profit)}</td></tr></table>
-      ${history.length ? `<p class="cat">PREVIOUS DAYS</p><table><tr><th>DAY</th><th class="num">REVENUE</th><th class="num">COSTS</th><th class="num">PROFIT</th></tr>
-      ${history.map(d => `<tr><td>${d.day}</td><td class="num">${fmtMoney(d.revenue)}</td><td class="num">${fmtMoney(d.food + d.staff + d.upgrades)}</td><td class="num ${d.profit < 0 ? 'neg' : 'pos'}">${fmtMoney(d.profit)}</td></tr>`).join('')}</table>` : ''}`;
+      <p class="muted">Card payments reach the bank right away. Cash stays in the register until closing, when everything above the ${fmtMoney(FLOAT)} float is banked.</p>
+      ${history.length ? `<p class="cat">PREVIOUS DAYS</p><table><tr><th>DAY</th><th class="num">GUESTS</th><th class="num">REVENUE</th><th class="num">COSTS</th><th class="num">PROFIT</th></tr>
+      ${history.map(d => `<tr><td>${d.day}</td><td class="num">${d.guests}</td><td class="num">${fmtMoney(d.revenue)}</td><td class="num">${fmtMoney(d.food + d.staff + d.upgrades)}</td><td class="num ${d.profit < 0 ? 'neg' : 'pos'}">${fmtMoney(d.profit)}</td></tr>`).join('')}</table>` : ''}`;
   }
   osEl.innerHTML = `<div class="win"><div class="bar"><span>ASADO OS 1.0 · DAY ${day} · ${fmtTime(clockMin)}</span><button data-a="exit">EXIT ✕</button></div>
     <div class="tabs">${tab('upgrades', 'UPGRADES')}${tab('wholesale', 'FOOD WHOLESALE')}${tab('finances', 'FINANCES')}</div>
@@ -1201,20 +1383,28 @@ function buyUpgrade(u) {
   const cost = u.cost[u.level];
   if (money < cost) return;
   money -= cost;
-  if (u.id === 'cook') today.staff += cost; else today.upgrades += cost;
+  today.upgrades += cost;
   u.level++;
   if (u.id === 'tables') tables[3].active = tables[3].col.on = tables[3].group.visible = true;
   if (u.id === 'interior') decor.visible = true;
   if (u.id === 'cold') freezer.visible = freezerCol.on = true;
   if (u.id === 'storage') extraShelf.g.visible = extraShelf.col.on = true;
-  if (u.id === 'cook') hireCook();
   if (u.id === 'quality') wsQ = u.level;
   refreshStorage();
   refreshTrays();
   osMsg = `${u.name} purchased!`;
   sfx.pay();
 }
-function placeOrder() { // pay now; one crate per item arrives in the delivery area shortly
+function hireStaff(role) {
+  const r = ROLES[role];
+  if (r.soon || hired(role) || money < r.hire) return;
+  money -= r.hire;
+  today.staff += r.hire;
+  hire(role);
+  osMsg = `${r.name} hired! Wage: ${fmtMoney(r.wage)} per day.`;
+  sfx.pay();
+}
+function placeOrder() { // pay now; one crate per item arrives in the delivery area
   const list = [];
   let total = 0;
   for (const k of wsItems()) {
@@ -1225,8 +1415,8 @@ function placeOrder() { // pay now; one crate per item arrives in the delivery a
   }
   money -= total;
   today.food += total;
-  delivery = { t: 4, list: delivery ? delivery.list.concat(list) : list };
-  osMsg = `Order placed for ${fmtMoney(total)}. The truck will drop the crates in the DELIVERY area.`;
+  delivery = { t: isOpen ? gm(20) : 6, list: delivery ? delivery.list.concat(list) : list };
+  osMsg = `Order placed for ${fmtMoney(total)}. The truck will drop the crates in the DELIVERY area${isOpen ? ' in about 20 minutes' : ''}.`;
 }
 function onUIClick(e) {
   const b = e.target.closest('button');
@@ -1238,6 +1428,7 @@ function onUIClick(e) {
   if (a === 'next') return nextDay();
   if (a === 'tab') osTab = v;
   if (a === 'buy') buyUpgrade(UPGRADES.find(u => u.id === v));
+  if (a === 'hire') hireStaff(v);
   if (a === 'q') wsQ = +v;
   if (a === 'qty') wsQty[v] = Math.max(0, Math.min(20, wsQty[v] + +b.dataset.d));
   if (a === 'order') placeOrder();
@@ -1245,6 +1436,200 @@ function onUIClick(e) {
 }
 osEl.addEventListener('click', onUIClick);
 sumEl.addEventListener('click', onUIClick);
+
+// ---------- Register (POS): checkout on a small in-game computer, with a cash drawer and a card reader ----------
+const POS_W = 0.5, POS_H = 0.352;
+const posCanvas = document.createElement('canvas');
+posCanvas.width = 1024;
+posCanvas.height = 720;
+const posTex = new THREE.CanvasTexture(posCanvas);
+posTex.colorSpace = THREE.SRGBColorSpace;
+const posMon = new THREE.Group();
+posMon.position.set(-5.6, 1.4, -3.62);
+posMon.rotation.y = Math.PI; // the screen faces the staff side of the counter
+part(new THREE.BoxGeometry(POS_W + 0.04, POS_H + 0.04, 0.04), dark, 0, 0, -0.022, posMon);
+const posScreen = part(new THREE.PlaneGeometry(POS_W, POS_H), new THREE.MeshBasicMaterial({ map: posTex }), 0, 0, 0, posMon);
+posScreen.castShadow = false;
+part(new THREE.BoxGeometry(0.05, 0.2, 0.05), dark, 0, -0.27, -0.03, posMon);
+const posCursor = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape([V2(0, 0), V2(0, -0.024), V2(0.0065, -0.018), V2(0.012, -0.028), V2(0.016, -0.026), V2(0.0105, -0.016), V2(0.018, -0.016)])), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+posCursor.visible = false;
+posMon.add(posCursor);
+posMon.userData.kind = 'register';
+scene.add(posMon);
+part(new THREE.BoxGeometry(0.36, 0.02, 0.12), dark, -5.6, 1.07, -3.8);   // keyboard
+part(new THREE.BoxGeometry(0.045, 0.02, 0.07), dark, -5.3, 1.07, -3.8);  // mouse
+const cashDrawer = part(new THREE.BoxGeometry(0.44, 0.09, 0.3), mat(0x3a3f45), -5.6, 0.94, -3.755);
+const readerCanvas = document.createElement('canvas');
+readerCanvas.width = 256;
+readerCanvas.height = 160;
+const readerTex = new THREE.CanvasTexture(readerCanvas);
+readerTex.colorSpace = THREE.SRGBColorSpace;
+const reader = new THREE.Group();
+reader.position.set(-5, 1.08, -3.3);
+reader.rotation.x = 0.45; // the card reader tilts towards the guest
+part(new THREE.BoxGeometry(0.09, 0.025, 0.16), dark, 0, 0, 0, reader);
+part(new THREE.PlaneGeometry(0.076, 0.048), new THREE.MeshBasicMaterial({ map: readerTex }), 0, 0.0135, 0.025, reader).rotation.x = -Math.PI / 2;
+scene.add(reader);
+function setReader(a, b = '') {
+  const g = readerCanvas.getContext('2d');
+  g.fillStyle = '#0d1f14';
+  g.fillRect(0, 0, 256, 160);
+  g.fillStyle = '#9fe0b0'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = 'bold 34px monospace'; g.fillText(a, 128, 58);
+  g.font = '22px monospace'; g.fillText(b, 128, 112);
+  readerTex.needsUpdate = true;
+}
+setReader('WELCOME');
+const pos = { for: undefined, method: null, step: 'method', entry: '', msg: '', change: 0, tip: 0, readerT: 0, drawerT: 0, cx: 0.5, cy: 0.5, hover: null, buttons: [], dirty: true, minute: -1 };
+const POS_VIEW = new THREE.Vector3(-5.6, EYE, -4.3);
+const posCur = () => (payQueue[0]?.state === 'paying' ? payQueue[0] : null);
+function openPOS() {
+  uiMode = 'pos';
+  pos.dirty = true;
+  posCursor.visible = true;
+  renderer.domElement.style.cursor = 'none';
+  document.exitPointerLock();
+  sfx.ui();
+}
+function posExit() {
+  uiMode = null;
+  pos.dirty = true;
+  posCursor.visible = false;
+  renderer.domElement.style.cursor = '';
+  startEl.style.display = document.pointerLockElement ? 'none' : 'flex';
+  lockPointer();
+}
+function posAction(id) { // checkout steps: method → amount → (cash: change | card: tip on the reader → approved)
+  const c = posCur();
+  pos.dirty = true;
+  sfx.ui();
+  if (id === 'logoff') return posExit();
+  if (!c) return;
+  const total = billTotal(c);
+  pos.msg = '';
+  if (id === 'cash' || id === 'card') {
+    if (c.pay.method !== id) { pos.msg = `This guest pays by ${c.pay.method.toUpperCase()}`; sfx.bad(); return; }
+    pos.method = id;
+    pos.step = id + 'Amount';
+    pos.entry = '';
+    if (id === 'card') setReader(`$${total}`, 'ENTER AMOUNT');
+  } else if (/^d\d$/.test(id)) { if (pos.entry.length < 4) pos.entry += id[1]; }
+  else if (id === 'clr') pos.entry = '';
+  else if (id.startsWith('bill')) pos.entry = id.slice(4);
+  else if (id === 'enter' && pos.step === 'cashAmount') {
+    if (+pos.entry !== c.pay.tender) { pos.msg = `The guest handed you ${fmtMoney(c.pay.tender)}`; sfx.bad(); return; }
+    pos.change = c.pay.tender - total;
+    pos.step = 'cashChange';
+  } else if (id === 'enter' && pos.step === 'cardAmount') {
+    if (+pos.entry !== total) { setReader('DECLINED', 'WRONG AMOUNT'); pos.msg = `The card amount must match the total, ${fmtMoney(total)}`; sfx.bad(); return; }
+    pos.step = 'cardTip';
+    pos.readerT = 1.5;
+    setReader(`$${total}`, 'TIP? 0 5 10 15%');
+  } else if (id === 'change' && pos.step === 'cashChange') {
+    pos.step = 'cashDone';
+    pos.drawerT = 1.3;
+    pos.tip = Math.round(total * tipPct(c) / 100); // cash tips go in the jar
+    sfx.store();
+  } else if (id === 'complete' && pos.step === 'cardApproved') completePayment(c, 'card', pos.tip);
+}
+function updatePOS(dt, playing) {
+  const c = posCur();
+  if (c !== pos.for) { // the next guest stepped up to the register
+    pos.for = c; pos.method = null; pos.step = 'method'; pos.entry = ''; pos.msg = ''; pos.readerT = pos.drawerT = 0; pos.dirty = true;
+    setReader(c ? `$${billTotal(c)}` : 'WELCOME', c ? 'PLEASE WAIT' : '');
+  }
+  if (playing && pos.readerT > 0 && (pos.readerT -= dt) <= 0 && c) { // the guest picks a tip on the reader
+    const pct = tipPct(c);
+    pos.tip = Math.round(billTotal(c) * pct / 100);
+    pos.step = 'cardApproved';
+    setReader('APPROVED', `TIP ${pct}% · $${pos.tip}`);
+    sfx.serve();
+    pos.dirty = true;
+  }
+  if (playing && pos.drawerT > 0 && (pos.drawerT -= dt) <= 0 && c) completePayment(c, 'cash', pos.tip);
+  cashDrawer.position.z += ((pos.drawerT > 0 ? -4 : -3.755) - cashDrawer.position.z) * Math.min(1, dt * 10);
+  if (Math.floor(clockMin) !== pos.minute) { pos.minute = Math.floor(clockMin); pos.dirty = true; }
+  if (pos.dirty) { pos.dirty = false; drawPOS(); }
+  const fov = uiMode === 'pos' ? 36 : 75;
+  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 6); camera.updateProjectionMatrix(); }
+  if (uiMode !== 'pos') return;
+  const k = Math.min(1, dt * 6), p = camera.position; // step up to the screen
+  p.lerp(POS_VIEW, k);
+  const ty = Math.atan2(p.x + 5.6, p.z + 3.62), tp = Math.atan2(1.4 - p.y, Math.hypot(p.x + 5.6, p.z + 3.62));
+  yaw += Math.atan2(Math.sin(ty - yaw), Math.cos(ty - yaw)) * k;
+  pitch += (tp - pitch) * k;
+  camera.rotation.set(pitch, yaw, 0);
+}
+function drawPOS() { // a tiny fictional desktop: menu bar, register line, ticket window, keypad
+  const g = posCanvas.getContext('2d'), c = posCur(), B = (pos.buttons = []);
+  const text = (t, x, y, size = 26, color = '#e8f1f2', align = 'left', bold = true) => {
+    g.font = `${bold ? 'bold ' : ''}${size}px sans-serif`; g.fillStyle = color; g.textAlign = align; g.textBaseline = 'middle'; g.fillText(t, x, y);
+  };
+  const rr = (x, y, w, h, color, r = 12) => { g.fillStyle = color; g.beginPath(); g.roundRect(x, y, w, h, r); g.fill(); };
+  const btn = (id, x, y, w, h, label, color = '#2d6f86') => { B.push({ id, x, y, w, h }); rr(x, y, w, h, pos.hover === id ? '#4ba3c3' : color, 10); text(label, x + w / 2, y + h / 2, 26, '#fff', 'center'); };
+  g.fillStyle = '#10232b'; g.fillRect(0, 0, 1024, 720);
+  g.fillStyle = '#e3a33a'; g.fillRect(0, 0, 1024, 56);
+  text('ASADO POS', 22, 28, 28, '#24160a');
+  text(`CAJA 1 · ${fmtTime(clockMin)} · DRAWER ${fmtMoney(drawer)}`, 1002, 28, 22, '#24160a', 'right');
+  rr(16, 72, 240, 570, '#16323d');
+  text('REGISTER LINE', 32, 102, 20, '#9cc3cf');
+  if (!payQueue.length) text('nobody waiting', 32, 142, 21, '#5f8794', 'left', false);
+  payQueue.slice(0, 10).forEach((q, i) => text(`TABLE ${q.table.n} · ${q.state === 'paying' ? q.pay.method.toUpperCase() : 'coming'}`, 32, 142 + i * 40, 21, q.state === 'paying' ? '#ffd76a' : '#9cc3cf', 'left', q.state === 'paying'));
+  rr(272, 72, 736, 570, '#f4efe6');
+  if (!c) text(payQueue.length ? 'A guest is walking to the register…' : 'No guest at the register', 640, 340, 28, '#7a6a5a', 'center');
+  else {
+    const total = billTotal(c);
+    text(`TABLE ${c.table.n} · ${1 + c.members.length} guest${c.members.length ? 's' : ''}`, 292, 104, 26, '#24160a');
+    billLines(c).slice(0, 8).forEach((l, i) => {
+      text(`${l.qty}× ${l.name}`, 292, 146 + i * 30, 21, '#3b2f25', 'left', false);
+      text(fmtMoney(l.qty * l.each), 700, 146 + i * 30, 21, '#3b2f25', 'right', false);
+    });
+    g.fillStyle = '#d8cdbd'; g.fillRect(292, 398, 408, 2);
+    text('TOTAL', 292, 426, 28, '#24160a');
+    text(fmtMoney(total), 700, 426, 30, '#24160a', 'right');
+    text(c.pay.method === 'card' ? 'Guest pays by CARD' : `Guest pays CASH · hands you ${fmtMoney(c.pay.tender)}`, 292, 466, 21, '#9a5212');
+    if (pos.step === 'method') { btn('cash', 292, 500, 196, 70, 'CASH', '#3d7a4a'); btn('card', 504, 500, 196, 70, 'CARD', '#3a5d9a'); }
+    if (pos.step === 'cashAmount' || pos.step === 'cardAmount') {
+      rr(292, 494, 408, 54, '#ffffff', 8);
+      text(`${pos.step === 'cashAmount' ? 'RECEIVED' : 'CARD AMOUNT'}  $${pos.entry || '0'}`, 306, 521, 26, '#24160a');
+      btn('enter', 292, 560, 408, 64, pos.step === 'cashAmount' ? 'ENTER' : 'SEND TO READER', '#3d7a4a');
+      ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0'].forEach((k, i) => btn(k === 'C' ? 'clr' : 'd' + k, 728 + (i % 3) * 90, 100 + Math.floor(i / 3) * 76, 80, 64, k, '#3a4b55'));
+      if (pos.step === 'cashAmount') [20, 50, 100].forEach((b, i) => btn('bill' + b, 728 + i * 90, 410, 80, 56, `$${b}`, '#6b5b2a'));
+    }
+    if (pos.step === 'cashChange') {
+      text(`CHANGE DUE ${fmtMoney(pos.change)}`, 292, 522, 34, '#24160a');
+      btn('change', 292, 560, 408, 64, pos.change ? `GIVE ${fmtMoney(pos.change)} CHANGE` : 'CLOSE SALE', '#3d7a4a');
+    }
+    if (pos.step === 'cashDone') text('Drawer open… counting the change', 292, 540, 26, '#3b2f25');
+    if (pos.step === 'cardTip') text('The guest is choosing a tip on the card reader…', 292, 540, 22, '#3b2f25');
+    if (pos.step === 'cardApproved') { text(`APPROVED · tip ${fmtMoney(pos.tip)}`, 292, 522, 30, '#2f7d3a'); btn('complete', 292, 560, 408, 64, 'COMPLETE SALE', '#3d7a4a'); }
+  }
+  if (pos.msg) text(pos.msg, 272, 676, 22, '#ff9a80');
+  if (uiMode === 'pos') btn('logoff', 868, 652, 140, 50, 'LOG OFF', '#7a3b2e');
+  else text('[E] USE REGISTER', 1002, 676, 22, '#5f8794', 'right');
+  posTex.needsUpdate = true;
+}
+const ndc = new THREE.Vector2();
+function posPointer(e) { // the real mouse moves a cursor drawn on the register screen
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObject(posScreen)[0];
+  if (!hit) return;
+  pos.cx = hit.uv.x;
+  pos.cy = 1 - hit.uv.y;
+  posCursor.position.set((pos.cx - 0.5) * POS_W, (0.5 - pos.cy) * POS_H, 0.003);
+  const x = pos.cx * 1024, y = pos.cy * 720, b = pos.buttons.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  const id = b ? b.id : null;
+  if (id !== pos.hover) { pos.hover = id; pos.dirty = true; }
+}
+function posClick() { if (pos.hover) posAction(pos.hover); }
+function posKey(e) {
+  if (e.code === 'Escape') return posExit();
+  if (/^(Digit|Numpad)\d$/.test(e.code)) posAction('d' + e.code.slice(-1));
+  if (e.code === 'Backspace') { pos.entry = pos.entry.slice(0, -1); pos.dirty = true; }
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') posAction(pos.step === 'cashChange' ? 'change' : pos.step === 'cardApproved' ? 'complete' : 'enter');
+}
 
 // ---------- Interaction ----------
 function customerTarget(obj) {
@@ -1258,6 +1643,7 @@ function getAction(o) {
   if (kind === 'customer') {
     if (ref.state === 'queue' || ref.state === 'order') return getAction(counter);
     if (ref.state === 'wait' || ref.state === 'eat' || ref.state === 'toTable') return getAction(ref.table.group);
+    if (ref.state === 'toPay' || ref.state === 'payLine' || ref.state === 'paying') return getAction(posMon);
     return null;
   }
   if (kind === 'counter') {
@@ -1290,7 +1676,7 @@ function getAction(o) {
     if (c.state === 'toTable' || h?.kind !== 'cooked') return { label: `Mesa ${ref.n} wants: ${wants}` };
     const i = c.items.findIndex(it => !it.served && it.dish === h.type);
     if (i < 0) return { label: `Mesa ${ref.n} didn't order ${FOODS[h.type].name} (wants ${wants})` };
-    return { label: `[E] Serve ${FOODS[h.type].name}`, fn: () => serve(c, i) };
+    return { label: `[E] Serve ${FOODS[h.type].name}`, fn: () => { const p = held; dropHeld(); serve(c, i, p); } };
   }
   if (kind === 'sign' || kind === 'door') {
     if (isOpen) return { label: '[E] CLOSE RESTAURANT', fn: closeRestaurant };
@@ -1317,6 +1703,10 @@ function getAction(o) {
     if (!n) return { label: `No ${name} portions yet: cut a whole ${name} first` };
     return { label: `[E] Take ${name} portion${qTag(trays[ref][0])} (${n} left)`, fn: () => takeFromTray(ref) };
   }
+  if (kind === 'register') {
+    if (camera.position.z > -3.85) return { label: 'Register: step behind the counter to use it' };
+    return { label: posCur() ? '[E] USE REGISTER · a guest is waiting to pay' : '[E] USE REGISTER', fn: openPOS };
+  }
   if (kind === 'terminal') return { label: '[E] USE TERMINAL', fn: openTerminal };
   return null;
 }
@@ -1330,12 +1720,17 @@ function heldName() {
 const raycaster = new THREE.Raycaster();
 raycaster.far = 3.2;
 const center = new THREE.Vector2();
-const fixedTargets = [...solids, coals, doorPivot, signPivot, board, monitor, ...bins.map(b => b.hit), ...trayObjs.map(t => t.t)];
+const fixedTargets = [...solids, coals, doorPivot, signPivot, board, monitor, posMon, ...bins.map(b => b.hit), ...trayObjs.map(t => t.t)];
 let currentAction = null;
 function updateInteraction() {
+  if (uiMode) {
+    currentAction = null;
+    promptEl.textContent = uiMode === 'pos' ? 'Use the mouse on the register screen · Esc to step away' : '';
+    return;
+  }
   raycaster.setFromCamera(center, camera);
-  const targets = [...fixedTargets, ...grillFood.map(f => f.mesh), ...tables.filter(t => t.active).map(t => t.group),
-    ...customers.filter(c => c.state !== 'exit').map(c => c.group), ...crates.map(c => c.mesh)];
+  const people = customers.filter(c => c.state !== 'exit').flatMap(c => [c.group, ...c.members.map(m => m.group)]);
+  const targets = [...fixedTargets, ...grillFood.map(f => f.mesh), ...tables.filter(t => t.active).map(t => t.group), ...people, ...crates.map(c => c.mesh)];
   const hit = raycaster.intersectObjects(targets, true)[0];
   const o = hit && customerTarget(hit.object);
   currentAction = o && !busy ? getAction(o) : null;
@@ -1354,7 +1749,10 @@ function fmtTime(min) {
 }
 function hintText() { // one line telling the player what to do next
   if (dayDone) return '';
-  if (isOpen) return clockMin >= CLOSE_AT ? 'Closing time: finish the last tables, then CLOSE at the sign by the front door' : '';
+  if (isOpen) {
+    if (clockMin >= CLOSE_AT) return 'Closing time: finish the last tables, then CLOSE at the sign by the front door';
+    return posCur() && uiMode !== 'pos' ? 'A guest is waiting at the REGISTER to pay' : '';
+  }
   if (held?.kind === 'crate') return 'Carry the crate to COLD STORAGE in the back of house and press E';
   if (crates.length) return 'Crates are waiting in the DELIVERY area: go through the KITCHEN and out the back door';
   if (!everOpened) return 'All stocked! Open the restaurant at the OPEN/CLOSED sign by the front door';
@@ -1362,10 +1760,10 @@ function hintText() { // one line telling the player what to do next
 }
 let hudKey = '';
 function updateHUD() {
-  const hint = hintText(), key = `${day}|${Math.floor(clockMin)}|${money}|${isOpen}|${hint}`;
+  const hint = hintText(), rush = rushNow(), key = `${day}|${Math.floor(clockMin)}|${money}|${isOpen}|${hint}|${rush && rush.name}`;
   if (key === hudKey) return;
   hudKey = key;
-  hudEl.innerHTML = `DAY ${day} · ${fmtTime(clockMin)} · <span class="money">${fmtMoney(money)}</span><span class="st ${isOpen ? 'open' : 'closed'}">${isOpen ? 'OPEN' : 'CLOSED'}</span>`;
+  hudEl.innerHTML = `DAY ${day} · ${fmtTime(clockMin)} · <span class="money">${fmtMoney(money)}</span><span class="st ${isOpen ? 'open' : 'closed'}">${isOpen ? 'OPEN' : 'CLOSED'}</span>${rush ? `<span class="st rush">${rush.name}</span>` : ''}`;
   hintEl.textContent = hint;
 }
 let screenKey = '', screenT = 0;
@@ -1374,13 +1772,21 @@ function drawScreens(dt) { // counter POS + kitchen display: active orders per t
   screenT = 0.3;
   const rows = [];
   for (const c of customers.filter(c => c.items && ['toTable', 'wait', 'eat'].includes(c.state)).sort((a, b) => a.table.n - b.table.n)) {
-    rows.push([`TABLE ${c.table.n}`, c.state === 'eat' ? 'EATING' : c.state === 'toTable' ? 'SEATING' : 'WAITING', 1]);
+    rows.push([`TABLE ${c.table.n} (${1 + c.members.length})`, c.state === 'eat' ? 'EATING' : c.state === 'toTable' ? 'SEATING' : 'WAITING', 1]);
     const n = {};
-    c.items.forEach(i => { const e = (n[i.dish] ||= [0, 0]); e[0]++; if (i.served) e[1]++; });
-    for (const [d, [k, sv]] of Object.entries(n)) rows.push([`  ${FOODS[d].name} ×${k}`, sv === k ? 'SERVED' : sv ? `${sv}/${k} served` : 'TO COOK', 0]);
+    for (const i of c.items) {
+      const e = (n[i.dish + (i.sauce ? '+' + i.sauce : '')] ||= [0, 0, 0]);
+      e[0]++;
+      if (i.served) e[1]++;
+      if (i.served && (!i.sauce || i.sauced)) e[2]++;
+    }
+    for (const [key, [k, sv, done]] of Object.entries(n)) {
+      const [d, sc] = key.split('+');
+      rows.push([`  ${FOODS[d].name}${sc ? ' + ' + SAUCES[sc].short : ''} ×${k}`, done === k ? 'SERVED' : sv === k ? 'ADD SAUCE' : sv ? `${sv}/${k} served` : 'TO COOK', 0]);
+    }
   }
-  const waiting = queue.filter(c => c.state === 'order').length;
-  const key = JSON.stringify(rows) + waiting + isOpen + Math.floor(clockMin);
+  const waiting = queue.filter(c => c.state === 'order').length, paying = payQueue.length;
+  const key = JSON.stringify(rows) + waiting + paying + isOpen + Math.floor(clockMin);
   if (key === screenKey) return;
   screenKey = key;
   const g = orderCanvas.getContext('2d'), W = 512, H = 360;
@@ -1406,10 +1812,8 @@ function drawScreens(dt) { // counter POS + kitchen display: active orders per t
     g.textAlign = 'right'; g.fillStyle = b === 'SERVED' ? '#6fdc8c' : head ? '#8fc0a0' : '#ffb347'; g.fillText(b, W - 14, y);
     y += 26;
   }
-  if (waiting) {
-    g.textAlign = 'left'; g.font = 'bold 20px monospace'; g.fillStyle = '#ffb347';
-    g.fillText(`COUNTER: ${waiting} guest${waiting > 1 ? 's' : ''} waiting to order`, 14, H - 20);
-  }
+  const foot = [waiting && `COUNTER: ${waiting} to order`, paying && `REGISTER: ${paying} to pay`].filter(Boolean).join(' · ');
+  if (foot) { g.textAlign = 'left'; g.font = 'bold 20px monospace'; g.fillStyle = '#ffb347'; g.fillText(foot, 14, H - 20); }
   orderTex.needsUpdate = true;
 }
 
@@ -1426,13 +1830,16 @@ document.addEventListener('pointerlockchange', () => {
   startEl.style.display = document.pointerLockElement || uiMode ? 'none' : 'flex';
 });
 document.addEventListener('mousemove', e => {
+  if (uiMode === 'pos') return posPointer(e);
   if (!document.pointerLockElement || uiMode || busy) return;
   yaw -= e.movementX * 0.0022;
   pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0022, -1.5, 1.5);
   camera.rotation.set(pitch, yaw, 0);
 });
+renderer.domElement.addEventListener('mousedown', () => { if (uiMode === 'pos') posClick(); });
 addEventListener('keydown', e => {
   keys[e.code] = true;
+  if (uiMode === 'pos') return posKey(e);
   if (e.code === 'Escape' && uiMode === 'os') closeUI();
   if (e.code === 'KeyE' && document.pointerLockElement && !uiMode && !busy && currentAction && currentAction.fn) currentAction.fn();
 });
@@ -1519,16 +1926,16 @@ const clock = new THREE.Clock();
 const lastPos = new THREE.Vector3();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  const playing = !!document.pointerLockElement && !uiMode;
+  const playing = (!!document.pointerLockElement || uiMode === 'pos') && (!uiMode || uiMode === 'pos'); // the shift keeps running at the register
   if (playing) {
-    if (busy) updateBusy(dt); else updatePlayer(dt);
+    if (busy) updateBusy(dt); else if (uiMode !== 'pos') updatePlayer(dt);
     if (isOpen) {
       clockMin = Math.min(clockMin + dt * TIME_SCALE, CLOSE_AT + 60);
       if (clockMin >= CLOSE_AT && !warnedClosing) {
         warnedClosing = true;
         toast('Closing time! No new guests. Finish up, then CLOSE at the front door sign.', '#ffb347', 5);
       }
-      if ((spawnTimer -= dt) <= 0 && clockMin < CLOSE_AT) { spawnCustomer(); spawnTimer = spawnGap(); }
+      if (clockMin < CLOSE_AT) updateDemand(dt);
     }
 
     const speed = has('grillq') ? 1.35 : 1;
@@ -1547,7 +1954,7 @@ function frame() {
     if (sizzleGain) sizzleGain.gain.value = grillFood.length ? 0.015 * grillFood.length : 0;
 
     for (const c of [...customers]) updateCustomer(c, dt);
-    if (cook) updateCook(dt);
+    updateStaff(dt);
     if (delivery && (delivery.t -= dt) <= 0) {
       delivery.list.forEach(placeCrate);
       delivery = null;
@@ -1560,6 +1967,7 @@ function frame() {
     if (msgTimer > 0 && (msgTimer -= dt) <= 0) msgEl.textContent = '';
   } else if (sizzleGain) sizzleGain.gain.value = 0;
 
+  updatePOS(dt, playing);
   // the sign turns 180° and the door swings open/closed (it stays open until the last guest is out)
   signPivot.rotation.y += ((isOpen ? Math.PI : 0) - signPivot.rotation.y) * Math.min(1, dt * 3);
   doorPivot.rotation.y += ((isOpen || customers.length ? -Math.PI / 2 : 0) - doorPivot.rotation.y) * Math.min(1, dt * 2.5);
@@ -1576,12 +1984,19 @@ frame();
 
 // debug/test hook
 window.__game = {
-  camera, customers, queue, grillFood, tables, stock, trays, crates, bins, trayObjs, UPGRADES, history,
-  sign: signPivot, door: doorPivot, board, monitor, hands: { L: handL, R: handR, knife, plate: handPlate },
-  get money() { return money; }, set money(v) { money = v; }, get held() { return held; }, get action() { return currentAction; },
+  camera, customers, queue, payQueue, grillFood, tables, stock, trays, crates, bins, trayObjs, UPGRADES, ROLES, history, staff, transactions, pos,
+  sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate },
+  get money() { return money; }, set money(v) { money = v; }, get drawer() { return drawer; }, get held() { return held; }, get action() { return currentAction; },
   get day() { return day; }, get isOpen() { return isOpen; }, get clockMin() { return clockMin; }, set clockMin(v) { clockMin = v; },
-  get today() { return today; }, get cook() { return cook; }, get busy() { return busy; }, get uiMode() { return uiMode; },
-  get delivery() { return delivery; }, get screenKey() { return screenKey; }, set spawnTimer(v) { spawnTimer = v; },
+  get today() { return today; }, get busy() { return busy; }, get uiMode() { return uiMode; }, get delivery() { return delivery; },
+  get screenKey() { return screenKey; }, set sinceArrival(v) { sinceArrival = v; }, dayCfg, demandRate, billTotal, tipPct, availability, FOODS,
   setLook(y, p) { yaw = y; pitch = p; camera.rotation.set(p, y, 0); },
   lookAt(x, y, z) { const p = camera.position; this.setLook(Math.atan2(p.x - x, p.z - z), Math.atan2(y - p.y, Math.hypot(x - p.x, z - p.z))); },
+  posButton(id) { // screen position of a register button, so tests can drive the real mouse
+    const b = pos.buttons.find(k => k.id === id);
+    if (!b) return null;
+    const v = posScreen.localToWorld(new THREE.Vector3(((b.x + b.w / 2) / 1024 - 0.5) * POS_W, (0.5 - (b.y + b.h / 2) / 720) * POS_H, 0)).project(camera);
+    const r = renderer.domElement.getBoundingClientRect();
+    return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height];
+  },
 };
