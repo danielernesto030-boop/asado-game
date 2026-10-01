@@ -1,7 +1,8 @@
 # Asado Tycoon — development status
 
-Pre-Higgsfield version: procedural low-poly visuals, canvas-texture signs and screens, no paid assets.
-Last updated with the "difficulty, POS, staff & restaurant systems" phase.
+Higgsfield version, block 1: guests and staff are Higgsfield 3D models. The rest is still procedural
+low-poly, with canvas-texture signs and screens. The frozen pre-Higgsfield version is commit 172ceab.
+Last updated with the "Higgsfield block 1: 3D characters" phase.
 
 ## Playable loop
 
@@ -37,6 +38,7 @@ Last updated with the "difficulty, POS, staff & restaurant systems" phase.
 | Status | Grill slot lamps (yellow cooking, green ready, flashing red, dark burnt); guest mood badge below 50% / 25% patience; patience % in the table prompt |
 | Interior | Ceiling with beams and lamps (enclosed room), windows, wainscoting, menu chalkboard behind the counter, wine shelf, charcoal sacks, low dividers separating the staff side, order screens at the counter, kitchen and grill |
 | Hands | Carried things sit small in the lower right; stacks of up to 4 raw portions of one kind (E adds one, hold E for more), all ready grill pieces in one E; cutting with a knife, pouring bottle → cup |
+| Characters | Three Higgsfield guest models (gaucho grandpa, football fan, señora); the room picks the type it has least of, and a repeat gets a light tint and 0.95–1.05 size. The asador model is used for every employee, with the beret showing the role (grill cook red, server black, prep cook white). Each GLB loads once and is shared. Code-only toy animation: waddle walk, breathing and sway when standing, sitting with the legs tucked and a slight lean back |
 | Economy | Wholesale food cost, upgrades, wages, tips; end-of-day summary and history in ASADO OS finances |
 
 ## Tests (headless Playwright, see CLAUDE.md)
@@ -45,6 +47,9 @@ Last updated with the "difficulty, POS, staff & restaurant systems" phase.
   checkout (wrong method/amount refused, tip, bank), cash checkout (wrong tender caught, change, drawer),
   rush and demand shape, hire a prep cook, delivery, books after closing, day 2 and day 3 (simultaneous
   orders), impatient guests leave.
+- `tests/playtest-characters.cjs` — `day1` and `day4` (lunch rush with all three staff). A sampler checks
+  every character: feet on the floor, no walking through chairs, facing the walking direction, and seated
+  guests on the seat, clear of the chair back and the table edge.
 - `tests/playtest-service.cjs` — one section per system, each on a fresh page (pass section names to run
   only those): `trays` (right/wrong dish and cup, READY, player and server delivery), `carry`, `cook`
   (grill cook), `grill` (levels), `burn` (window, flash, Better Grill), `patience`, `day4` (lunch rush).
@@ -52,12 +57,21 @@ Last updated with the "difficulty, POS, staff & restaurant systems" phase.
 Latest runs (headless Chromium, software WebGL): `playtest-service` every section passing with no page
 errors (trays, carry, cook, grill, burn, patience, day4); `playtest-pos` passed before the tray/multi-carry
 patch and was not re-run for it; `npm run build` succeeds.
+Higgsfield block 1: one `playtest-characters` run (day1, day4). Every character was a Higgsfield model,
+nobody floated or walked through a chair, staff cut and grilled, and there were no page errors. That run
+found seated guests dipping into the seat; this is fixed with a seated copy of the upper body clamped at the
+crotch line. It also found timing problems in the test itself, now fixed. The test was not re-run after these
+fixes, and the server carrying a tray was not seen within the day 4 window. `playtest-pos` and
+`playtest-service` were not re-run for the characters.
 
 ## Known limitations
 
 - Only one employee per role.
 - A partly filled raw stack goes back to its bin once it is full (or the bin is empty): E on the bin adds one.
-- Guests and staff don't collide with each other or the player (they follow fixed lanes).
+- Guests and staff don't collide with each other or the player (they follow fixed lanes); party members can
+  overlap a little in the counter queue.
+- Characters are rigid models: arms don't swing, carried things are held in front of the body, and seated
+  guests' legs are tucked out of sight.
 - Speech bubbles over guests (`?`, `CARD`, `CASH $50`) are the only floating sprites, by design.
 - Software rendering (CI/headless) runs at 5–8 fps; real GPUs are not a concern at this scene size.
 

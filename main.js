@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // ---------- Config ----------
 // Time: guest, grill and delivery timings are written in game minutes and converted with gm()
@@ -48,6 +49,8 @@ const EAT_MIN = 30;                                             // game minutes 
 const EYE = 1.6, PLAYER_R = 0.3, SPEED = 4, NPC_SPEED = 1.6;
 const DOOR_IN = new THREE.Vector3(-6, 0, 5.2), OUTSIDE = new THREE.Vector3(-6, 0, 8.5);
 const COUNTER_SPOT = new THREE.Vector3(-4, 0, -2.6), REGISTER_SPOT = new THREE.Vector3(-5.6, 0, -2.6);
+const LANE_OFF = 2, AISLE_Z = -1.5;            // walking lanes beside the tables and the aisle in front of them
+const EXIT_WAY = new THREE.Vector3(-3, 0, AISLE_Z); // seated parties leave along the aisle, clear of the tables
 
 // Demand, one row per day (the last row repeats and keeps ramping slowly). Tune difficulty here.
 //   rate: parties per game hour · rush: demand multiplier during lunch/dinner · party: possible party sizes
@@ -82,10 +85,22 @@ const lvl = id => UPGRADES.find(u => u.id === id).level;
 const has = id => lvl(id) > 0;
 // Staff roles, hired through the office terminal. The player always runs the register.
 const ROLES = {
-  prep: { name: 'Prep Cook', hire: 60, wage: 30, shirt: 0xffffff, hat: true, desc: 'Fetches whole cuts from cold storage and cuts them into portions' },
-  server: { name: 'Server', hire: 60, wage: 25, shirt: 0x26302b, desc: 'Carries READY trays from the service counter to the tables' },
+  prep: { name: 'Prep Cook', hire: 60, wage: 30, shirt: 0xffffff, hat: true, beret: 'asador_prep.jpg', desc: 'Fetches whole cuts from cold storage and cuts them into portions' },
+  server: { name: 'Server', hire: 60, wage: 25, shirt: 0x26302b, beret: 'asador_server.jpg', desc: 'Carries READY trays from the service counter to the tables' },
   grill: { name: 'Grill Cook', hire: 120, wage: 45, shirt: 0xffffff, hat: true, desc: 'Grills what open orders need and puts it on the table trays' },
 };
+// Characters: Higgsfield 3D models (public/models). Customers pick a type; every employee is the asador with a
+// beret per role (grill cook red, server black, prep cook white). crotch = share of the height where the legs start
+// (tucked away on a chair); shift/squash = seated forward offset (m) and front-to-back squeeze so the body fits
+// between the chair back and the table edge.
+const CHAR_H = 1.6, SEAT_TOP = 0.495;
+const CHARS = {
+  asador:  { file: 'asador.glb',  crotch: 0.2 },
+  grandpa: { file: 'grandpa.glb', crotch: 0.25, shift: 0.14, squash: 0.82 },
+  fan:     { file: 'fan.glb',     crotch: 0.2,  shift: 0.11, squash: 0.8 },
+  senora:  { file: 'senora.glb',  crotch: 0.17, shift: 0.11, squash: 0.89 },
+};
+const CUSTOMER_TYPES = ['grandpa', 'fan', 'senora'];
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
 const menu = () => Object.keys(FOODS).filter(d => d !== 'bife' || has('menu'));
@@ -425,7 +440,7 @@ const tables = [
     part(new THREE.BoxGeometry(0.1, 0.45, 0.1), tableWood, 0, 0.22, 0, ch);
     g.add(ch);
     part(plateGeo, plateMat, dx * 0.3, 0.797, dz * 0.3, g);
-    const lane = dx ? t.x + dx * 1.6 : t.x - 1.6; // guests walk in beside the table, never through it
+    const lane = dx ? t.x + dx * LANE_OFF : t.x - LANE_OFF; // guests walk in beside the table, never through it
     return { pos: new THREE.Vector3(t.x + dx, 0, t.z + dz), rot, lane: new THREE.Vector3(lane, 0, t.z + dz),
       plate: new THREE.Vector3(t.x + dx * 0.3, 0.82, t.z + dz * 0.3), side: new THREE.Vector3(-dz, 0, dx) };
   });
@@ -666,12 +681,103 @@ function makePerson(shirtColor) {
   return { root, body, legs, arms, t: Math.random() * 10, lx: 0, lz: 0 };
 }
 
-// Simple procedural pose: walk swing, sitting, eating (visual only)
+// Higgsfield characters: each model loads once; every person shares its geometry and textures
+const charLib = {}; // type → { upper, seated, legs, mat, cy } (people made before their model has loaded stay procedural)
+const gltfLoader = new GLTFLoader();
+gltfLoader.register(parser => { // embedded textures decode through <img>: a page's CSP may refuse fetch() of blob: URLs
+  parser.textureLoader = new THREE.TextureLoader(parser.options.manager);
+  return { name: 'imgTextures' };
+});
+for (const [type, k] of Object.entries(CHARS)) {
+  gltfLoader.load(`models/${k.file}`, gl => {
+    let mesh;
+    gl.scene.traverse(o => { if (o.isMesh) mesh = o; });
+    charLib[type] = prepChar(mesh, k);
+  });
+}
+function prepChar(mesh, k) { // arms a little closer to the body, CHAR_H tall with the feet at 0, facing +z, legs split off
+  const g = mesh.geometry.clone(), p = g.attributes.position;
+  g.computeBoundingBox();
+  const b = g.boundingBox, h = b.max.y - b.min.y, side = 0.22 * h; // the models face +x: z is their side
+  for (let i = 0; i < p.count; i++) { const z = p.getZ(i); if (Math.abs(z) > side) p.setZ(i, Math.sign(z) * (side + (Math.abs(z) - side) * 0.6)); }
+  const sc = CHAR_H / h;
+  g.applyMatrix4(new THREE.Matrix4().makeRotationY(-Math.PI / 2).multiply(new THREE.Matrix4().makeScale(sc, sc, sc))
+    .multiply(new THREE.Matrix4().makeTranslation(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2)));
+  const cy = k.crotch * CHAR_H, idx = g.index.array, up = [], lo = [];
+  for (let i = 0; i < idx.length; i += 3) (Math.max(p.getY(idx[i]), p.getY(idx[i + 1]), p.getY(idx[i + 2])) < cy ? lo : up).push(idx[i], idx[i + 1], idx[i + 2]);
+  const split = (list, pos = p) => { // shares the vertex data, only the triangle list differs
+    const q = new THREE.BufferGeometry();
+    for (const [n, a] of Object.entries(g.attributes)) q.setAttribute(n, n === 'position' ? pos : a);
+    q.setIndex(list);
+    q.computeBoundingSphere();
+    return q;
+  };
+  const seatPos = p.clone(); // seated: nothing of the upper body hangs below the crotch line, into the seat
+  for (let i = 0; i < seatPos.count; i++) seatPos.setY(i, Math.max(seatPos.getY(i), cy));
+  return { upper: split(up), seated: split(up, seatPos), legs: split(lo), mat: mesh.material, cy };
+}
+function makeToy(type, tint = null, map = null, size = 1) {
+  const L = charLib[type], root = new THREE.Group(), body = new THREE.Group(), model = new THREE.Group(), legs = new THREE.Group();
+  let m = L.mat;
+  if (tint || map) { m = m.clone(); if (tint) m.color.copy(tint); if (map) m.map = map; }
+  const up = new THREE.Mesh(L.upper, m), lo = new THREE.Mesh(L.legs, m);
+  up.castShadow = lo.castShadow = true;
+  legs.position.y = L.cy; // the legs fold up toward the crotch line when sitting
+  lo.position.y = -L.cy;
+  legs.add(lo);
+  model.add(up, legs);
+  model.scale.setScalar(size);
+  body.add(model);
+  root.add(body);
+  return { root, body, model, upper: up, lib: L, legGroup: legs, legs: [], arms: [], toy: CHARS[type], type, cy: L.cy, t: Math.random() * 10, lx: 0, lz: 0, sitT: 0, walk: 0, seed: Math.random() * 6 };
+}
+function makeCustomerRig(taken) { // a type the room has least of; a repeat gets a slight tint and size change
+  if (!CUSTOMER_TYPES.every(t => charLib[t])) return makePerson();
+  const live = [...customers.flatMap(c => [c.rig, ...c.members.map(m => m.rig)]).map(r => r.type), ...taken];
+  const count = t => live.filter(x => x === t).length, fewest = Math.min(...CUSTOMER_TYPES.map(count));
+  const type = pick(CUSTOMER_TYPES.filter(t => count(t) === fewest)), repeat = count(type) > 0;
+  taken.push(type);
+  return makeToy(type, repeat ? new THREE.Color().setHSL(Math.random(), 0.35, 0.86) : null, null, repeat ? 0.95 + Math.random() * 0.1 : 1);
+}
+const staffMaps = {};
+function staffMap(file) { // the asador's texture with a role-colored beret
+  if (!staffMaps[file]) {
+    const t = staffMaps[file] = loader.load(`models/${file}`);
+    t.flipY = false; // like the glTF's own textures
+    t.colorSpace = THREE.SRGBColorSpace;
+  }
+  return staffMaps[file];
+}
+// toy animation for the rigid models: a waddle when walking, breathing and a little sway when standing,
+// legs tucked away on the chair with a slight lean back; always facing where they walk (the path sets the root's turn)
+function poseToy(c, r, dt, moving, sitting) {
+  r.sitT += ((sitting ? 1 : 0) - r.sitT) * Math.min(1, dt * 5);
+  r.walk += ((moving && !sitting ? 1 : 0) - r.walk) * Math.min(1, dt * 8);
+  const e = r.sitT * r.sitT * (3 - 2 * r.sitT), w = r.walk, still = 1 - w, t = r.t, toy = r.toy, size = r.model.scale.x;
+  const rootY = c.group.position.y, step = Math.abs(Math.sin(t * 8)), sq = (1 - step) * 0.04 * w;
+  const breathe = Math.sin(t * 2.2 + r.seed) * 0.012 * still;
+  const sway = Math.sin(t * 0.9 + r.seed) * (0.012 + 0.03 * Math.max(0, Math.sin(t * 0.23 + r.seed)) ** 2) * still;
+  const nod = c.state === 'eat' ? 0.05 + Math.sin(t * 6) * 0.04 : c.state === 'prep' ? 0.12 + Math.sin(t * 12) * 0.06 : 0;
+  r.body.position.set(0, -rootY + SEAT_TOP * e + step * 0.05 * w, (toy.shift || 0) * e); // seated: the body rests on the seat
+  r.model.position.y = -r.cy * size * e; // pivot at the feet when standing, at the seat when sitting
+  r.body.rotation.set(-0.06 * e + nod, 0, Math.sin(t * 8) * 0.09 * w + sway);
+  const wide = 1 + sq * 0.5 - breathe * 0.5;
+  r.body.scale.set(wide, 1 - sq + breathe, wide * (1 + ((toy.squash || 1) - 1) * e));
+  r.legGroup.scale.y = Math.max(0.001, 1 - e);
+  r.legGroup.visible = e < 0.98;
+  r.upper.geometry = r.legGroup.visible ? r.lib.upper : r.lib.seated;
+  const top = CHAR_H * size * (1 - e) + (SEAT_TOP + (CHAR_H - r.cy) * size) * e; // head height
+  if (c.mood) c.mood.position.y = top + 0.25 - rootY;
+  if (c.bubble) c.bubble.position.y = top + 0.5 - rootY;
+}
+
+// Simple procedural pose (fallback people): walk swing, sitting, eating (visual only)
 function poseCustomer(c, dt) {
   const r = c.rig, p = c.group.position;
   const moving = Math.hypot(p.x - r.lx, p.z - r.lz) > 1e-4;
   r.lx = p.x; r.lz = p.z; r.t += dt;
   const sitting = c.state === 'wait' || c.state === 'eat';
+  if (r.toy) return poseToy(c, r, dt, moving, sitting);
   const s = moving && !sitting ? Math.sin(r.t * 9) * 0.5 : 0;
   r.body.position.y = sitting ? -0.09 : 0;
   r.legs.forEach((l, i) => {
@@ -693,13 +799,13 @@ function moodTex(sym, color) {
   return t;
 }
 const MOOD = { warn: new THREE.SpriteMaterial({ map: moodTex('!', '#d99a1e') }), angry: new THREE.SpriteMaterial({ map: moodTex('!!', '#d03030') }) };
-const MEMBER_OFFSETS = [[0, 0], [0.55, 0], [-0.55, 0], [0, 0.55]]; // where party members stand next to their leader
+const MEMBER_OFFSETS = [[0, 0], [0.75, 0], [-0.75, 0], [0, 0.75]]; // where party members stand next to their leader
 function spawnParty() { // a party walks in together; the leader orders and pays for the table
   const free = tables.filter(t => t.active && !t.customer);
   if (!free.length) return false;
-  const table = pick(free), size = pick(dayCfg().party);
+  const table = pick(free), size = pick(dayCfg().party), made = [];
   const person = i => {
-    const rig = makePerson();
+    const rig = makeCustomerRig(made);
     rig.root.position.set(OUTSIDE.x + MEMBER_OFFSETS[i][0], 0, OUTSIDE.z + i * 0.7);
     scene.add(rig.root);
     return rig;
@@ -735,7 +841,8 @@ function setBubble(c, text) {
 }
 
 function sit(group, seat) { group.position.set(seat.pos.x, -0.2, seat.pos.z); group.rotation.y = seat.rot; }
-const seatPath = st => [new THREE.Vector3(st.lane.x, 0, -1), st.lane.clone(), st.pos.clone()];
+const seatPath = st => [new THREE.Vector3(st.lane.x, 0, AISLE_Z), st.lane.clone(), st.pos.clone()];
+const exitPath = lane => [lane.clone(), new THREE.Vector3(lane.x, 0, AISLE_Z), EXIT_WAY.clone(), DOOR_IN.clone(), OUTSIDE.clone()];
 
 function takeOrder(c) {
   queue.shift();
@@ -895,7 +1002,7 @@ function goPay(c) { // the party gets up: the guests head out, the leader queues
   c.state = 'toPay';
   c.group.position.y = 0;
   const lane = c.table.seats[0].lane;
-  c.path = [lane.clone(), new THREE.Vector3(lane.x, 0, -1), REGISTER_SPOT.clone().add(new THREE.Vector3(0, 0, payQueue.length * 0.9))];
+  c.path = [lane.clone(), new THREE.Vector3(lane.x, 0, AISLE_Z), REGISTER_SPOT.clone().add(new THREE.Vector3(0, 0, payQueue.length * 0.9))];
   payQueue.push(c);
   c.patience = c.maxPatience = PATIENCE.pay * patienceMult();
   c.foods.forEach(m => scene.remove(m));
@@ -918,7 +1025,7 @@ function memberExit(m, c) {
   const seated = m.state === 'wait' || m.state === 'eat';
   m.state = 'exit';
   m.group.position.y = 0;
-  m.path = seated ? [c.table.seats[m.seatI].lane.clone(), DOOR_IN.clone(), OUTSIDE.clone()] : [DOOR_IN.clone(), OUTSIDE.clone()];
+  m.path = seated ? exitPath(c.table.seats[m.seatI].lane) : [DOOR_IN.clone(), OUTSIDE.clone()];
 }
 function leave(c, angry) {
   const seated = c.state === 'wait' || c.state === 'eat';
@@ -926,7 +1033,7 @@ function leave(c, angry) {
   c.group.position.y = 0;
   if (c.table.customer === c) c.table.customer = null;
   for (const q of [queue, payQueue]) { const i = q.indexOf(c); if (i >= 0) q.splice(i, 1); }
-  c.path = seated ? [c.table.seats[0].lane.clone(), DOOR_IN.clone(), OUTSIDE.clone()] : [DOOR_IN.clone(), OUTSIDE.clone()];
+  c.path = seated ? exitPath(c.table.seats[0].lane) : [DOOR_IN.clone(), OUTSIDE.clone()];
   c.foods.forEach(m => scene.remove(m));
   c.foods = [];
   c.members.forEach(m => { if (m.state !== 'exit') memberExit(m, c); });
@@ -1587,8 +1694,8 @@ const STAFF_HOME = { prep: new THREE.Vector3(2.2, 0, -8.8), server: new THREE.Ve
 const hired = role => staff.some(e => e.role === role);
 const wages = () => staff.reduce((n, e) => n + ROLES[e.role].wage, 0);
 function hire(role) {
-  const R = ROLES[role], rig = makePerson(R.shirt);
-  if (R.hat) part(new THREE.CylinderGeometry(0.14, 0.12, 0.2, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true }), 0, 1.86, 0, rig.body); // chef hat
+  const R = ROLES[role], rig = charLib.asador ? makeToy('asador', null, R.beret ? staffMap(R.beret) : null) : makePerson(R.shirt);
+  if (R.hat && !rig.toy) part(new THREE.CylinderGeometry(0.14, 0.12, 0.2, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true }), 0, 1.86, 0, rig.body); // chef hat
   const e = { role, rig, group: rig.root, state: 'idle', path: [], t: 1, task: null, carry: null };
   e.group.position.copy(STAFF_HOME[role]);
   scene.add(e.group);
@@ -1626,11 +1733,11 @@ const STAFF_AI = {
     } else if (e.state === 'back' && arrived) { e.state = 'idle'; e.t = 2; }
   },
   server(e, dt) { // wait → carry a READY table tray to its table in one trip → bring the empty tray back
-    const arrived = stepPath(e, dt), home = () => { e.state = 'back'; e.task = null; e.path = [new THREE.Vector3(e.group.position.x, 0, -1), STAFF_HOME.server.clone()]; };
+    const arrived = stepPath(e, dt), home = () => { e.state = 'back'; e.task = null; e.path = [new THREE.Vector3(e.group.position.x, 0, AISLE_Z), STAFF_HOME.server.clone()]; };
     if (e.state === 'idle' && (e.t -= dt) <= 0) {
       e.t = 0.5;
       const t = passTrays.find(t => t.ready && !t.claimed && !t.away);
-      if (t) { t.claimed = true; e.task = { t, c: t.owner }; e.state = 'toPass'; e.path = [new THREE.Vector3(t.x, 0, -2.8)]; }
+      if (t) { t.claimed = true; e.task = { t, c: t.owner }; e.state = 'toPass'; e.path = [new THREE.Vector3(t.x, 0, -2.7)]; }
     } else if (e.state === 'toPass' && arrived) {
       const { t, c } = e.task;
       if (!t.ready || t.away || t.owner !== c) { t.claimed = false; return home(); }
@@ -1642,12 +1749,12 @@ const STAFF_AI = {
       e.rig.body.add(t.group);
       const lane = c.table.seats[0].lane;
       e.state = 'deliver';
-      e.path = [new THREE.Vector3(lane.x, 0, -1), lane.clone()];
+      e.path = [new THREE.Vector3(lane.x, 0, AISLE_Z), lane.clone()];
     } else if (e.state === 'deliver' && arrived) {
       const { t, c } = e.task;
       if (c.state === 'wait' && c.table.customer === c) serveTray(t, c); else clearTray(t); // the party left: the food is thrown out
       e.state = 'return';
-      e.path = [new THREE.Vector3(e.group.position.x, 0, -1), new THREE.Vector3(t.x, 0, -2.8)];
+      e.path = [new THREE.Vector3(e.group.position.x, 0, AISLE_Z), new THREE.Vector3(t.x, 0, -2.7)];
     } else if (e.state === 'return' && arrived) {
       returnTray(e.task.t);
       e.carry = null;
@@ -1667,7 +1774,7 @@ const STAFF_AI = {
       if (ready.length) { // never lets them burn: they come off as soon as they're ready
         carry(stack('cooked', ready.map(offGrill)));
         e.task = trayFor(e.carry);
-        if (e.task) { e.state = 'toTray'; e.path = [new THREE.Vector3(e.task.x, 0, -3.95)]; } else drop(); // nobody needs them anymore
+        if (e.task) { e.state = 'toTray'; e.path = [new THREE.Vector3(e.task.x, 0, -4.1)]; } else drop(); // nobody needs them anymore
         return;
       }
       const need = grillNeed(), free = freeSlots();
@@ -1698,7 +1805,7 @@ const STAFF_AI = {
       trayPut(e.task, e.carry);
       syncTray(e.task);
       e.task = e.carry.items.length ? trayFor(e.carry) : null;
-      if (e.task) { e.path = [new THREE.Vector3(e.task.x, 0, -3.95)]; return; }
+      if (e.task) { e.path = [new THREE.Vector3(e.task.x, 0, -4.1)]; return; }
       drop(); // anything nobody needs anymore is thrown out
       e.state = 'back';
       e.path = [spot.clone()];
@@ -2577,7 +2684,7 @@ frame();
 // debug/test hook
 window.__game = {
   camera, customers, queue, payQueue, grillFood, tables, stock, trays, crates, bins, trayObjs, UPGRADES, ROLES, history, staff, transactions, pos,
-  scene, passTrays, holders, sauceLevel, slotLights, SLOTS, SAUCES, DAYS, ITEMS, PATIENCE, sauceAvail, slotCount, tipFactor, foodState, grillNeed,
+  scene, charLib, CHARS, CHAR_H, SEAT_TOP, passTrays, holders, sauceLevel, slotLights, SLOTS, SAUCES, DAYS, ITEMS, PATIENCE, sauceAvail, slotCount, tipFactor, foodState, grillNeed,
   sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate, bottle: handBottle, cup: handCup, stream, slot: holdSlot }, MOOD,
   get money() { return money; }, set money(v) { money = v; }, get drawer() { return drawer; }, get held() { return held; }, get action() { return currentAction; },
   get day() { return day; }, set day(v) { day = v; }, get isOpen() { return isOpen; }, get clockMin() { return clockMin; }, set clockMin(v) { clockMin = v; },
