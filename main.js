@@ -8,11 +8,12 @@ const gm = min => min / TIME_SCALE;      // game minutes → real seconds
 // Dishes: what guests order and what goes on the grill
 const FOODS = {
   // raw = RGB tint over the cooked texture (>1 brightens, so raw looks pale/pink)
-  chorizo:   { name: 'Chorizo',   price: 15, cook: gm(15), burn: gm(10), raw: [1.7, 1.2, 1.2] },
-  vacio:     { name: 'Vacío',     price: 25, cook: gm(20), burn: gm(10), raw: [1.9, 1.2, 1.25] },
-  provoleta: { name: 'Provoleta', price: 20, cook: gm(8),  burn: gm(6),  raw: [1.15, 1.15, 1.2] },
-  filet:     { name: 'Filet',     price: 35, cook: gm(14), burn: gm(8),  raw: [2, 1.15, 1.2], tex: 'vacio' },
-  bife:      { name: 'Bife de Chorizo', price: 30, cook: gm(16), burn: gm(8), raw: [1.9, 1.2, 1.2], tex: 'vacio' },
+  // burn = real seconds a ready piece lasts before it burns (the same for every dish)
+  chorizo:   { name: 'Chorizo',   price: 15, cook: gm(15), burn: 20, raw: [1.7, 1.2, 1.2] },
+  vacio:     { name: 'Vacío',     price: 25, cook: gm(20), burn: 20, raw: [1.9, 1.2, 1.25] },
+  provoleta: { name: 'Provoleta', price: 20, cook: gm(8),  burn: 20, raw: [1.15, 1.15, 1.2] },
+  filet:     { name: 'Filet',     price: 35, cook: gm(14), burn: 20, raw: [2, 1.15, 1.2], tex: 'vacio' },
+  bife:      { name: 'Bife de Chorizo', price: 30, cook: gm(16), burn: 20, raw: [1.9, 1.2, 1.2], tex: 'vacio' },
 };
 const MAINS = ['filet', 'vacio', 'bife'], STARTERS = ['provoleta', 'chorizo'];
 // Sauces are served in a small cup next to the dish they were ordered with (data-driven: add more here)
@@ -40,7 +41,9 @@ const QUALITY = [
 const STARTER = [['chorizo', 6], ['provoleta', 4], ['vacio_whole', 1], ['filet_whole', 1]]; // free crates on day 1
 const DAY_START = 11 * 60, OPEN_AT = 12 * 60, CLOSE_AT = 22 * 60;
 const FLOAT = 150;                                              // cash float in the register drawer (not revenue)
-const PATIENCE = { queue: 50, wait: 80, perDish: 12, pay: 35 }; // game minutes
+const PATIENCE = { queue: 60, foodFull: 60, foodZero: 120, foodLeave: 150, perDish: 15, pay: 60 }; // real seconds; food times +perDish per extra dish
+const BURN_WARN = 6;                                            // the grill lamp flashes red in a piece's last seconds
+const MAX_CARRY = 4;                                            // raw portions of one kind carried at once
 const EAT_MIN = 30;                                             // game minutes a party spends eating
 const EYE = 1.6, PLAYER_R = 0.3, SPEED = 4, NPC_SPEED = 1.6;
 const DOOR_IN = new THREE.Vector3(-6, 0, 5.2), OUTSIDE = new THREE.Vector3(-6, 0, 8.5);
@@ -51,9 +54,9 @@ const COUNTER_SPOT = new THREE.Vector3(-4, 0, -2.6), REGISTER_SPOT = new THREE.V
 //   extra: chance of a shared starter per two guests · sauce: chance a dish is ordered with a sauce
 //   cash: share of parties paying cash · patience: multiplier on guest patience (never below 1)
 const DAYS = [
-  { rate: 1.0, rush: 1.4, party: [1, 1, 2], extra: 0, sauce: 0, sauces: [], cash: 0.2, patience: 1.2 },
-  { rate: 1.3, rush: 1.6, party: [1, 2, 2], extra: 0.25, sauce: 0.3, sauces: ['chimi'], cash: 0.35, patience: 1.1 },
-  { rate: 1.6, rush: 1.8, party: [1, 2, 2, 3], extra: 0.35, sauce: 0.4, sauces: ['chimi'], cash: 0.45, patience: 1.05 },
+  { rate: 1.0, rush: 1.4, party: [1, 1, 2], extra: 0, sauce: 0, sauces: [], cash: 0.2, patience: 1 },
+  { rate: 1.3, rush: 1.6, party: [1, 2, 2], extra: 0.25, sauce: 0.3, sauces: ['chimi'], cash: 0.35, patience: 1 },
+  { rate: 1.6, rush: 1.8, party: [1, 2, 2, 3], extra: 0.35, sauce: 0.4, sauces: ['chimi'], cash: 0.45, patience: 1 },
   { rate: 1.9, rush: 2, party: [1, 2, 3, 4], extra: 0.45, sauce: 0.5, sauces: ['chimi', 'criolla'], cash: 0.5, patience: 1 },
   { rate: 2.2, rush: 2.2, party: [2, 2, 3, 4], extra: 0.5, sauce: 0.55, sauces: ['chimi', 'criolla'], cash: 0.5, patience: 1 },
 ];
@@ -64,7 +67,7 @@ function dayCfg() {
 }
 
 const UPGRADES = [
-  { id: 'grill', cat: 'KITCHEN', name: 'Bigger Grill', desc: '+1 grill slot', cost: [150] },
+  { id: 'grill', cat: 'KITCHEN', name: 'Bigger Grill', desc: '+2 grill spots per level (4 → 6 → 8 → 10)', cost: [150, 300, 450] },
   { id: 'grillq', cat: 'KITCHEN', name: 'Better Grill', desc: 'Food cooks 35% faster', cost: [120] },
   { id: 'prep', cat: 'KITCHEN', name: 'Better Prep Station', desc: '8 portions per whole cut, cutting twice as fast', cost: [100] },
   { id: 'cold', cat: 'STORAGE', name: 'Bigger Cold Storage', desc: '+20 storage space (extra freezer)', cost: [80] },
@@ -80,8 +83,8 @@ const has = id => lvl(id) > 0;
 // Staff roles, hired through the office terminal. The player always runs the register.
 const ROLES = {
   prep: { name: 'Prep Cook', hire: 60, wage: 30, shirt: 0xffffff, hat: true, desc: 'Fetches whole cuts from cold storage and cuts them into portions' },
-  server: { name: 'Server', hire: 90, wage: 35, shirt: 0x26302b, desc: 'Carries finished plates from the service counter to the tables' },
-  grill: { name: 'Grill Cook', hire: 120, wage: 45, shirt: 0xffffff, hat: true, desc: 'Works the parrilla', soon: true },
+  server: { name: 'Server', hire: 60, wage: 25, shirt: 0x26302b, desc: 'Carries READY trays from the service counter to the tables' },
+  grill: { name: 'Grill Cook', hire: 120, wage: 45, shirt: 0xffffff, hat: true, desc: 'Grills what open orders need and puts it on the table trays' },
 };
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
@@ -90,8 +93,8 @@ const patienceMult = () => (has('interior') ? 1.3 : 1) * dayCfg().patience;
 
 // ---------- State ----------
 let money = 0;
-let held = null;          // { kind: 'crate' | 'whole' | 'portion' | 'cooked' | 'bottle' | 'sauce', type, q, mesh, qs, sauce }
-const grillFood = [];     // { type, q, t, mesh, slot }
+let held = null;          // { kind: 'crate' | 'whole' | 'bottle' | 'sauce' | 'tray', type, q, mesh, ... }; stacks: { kind: 'portion' | 'cooked', items: [{ type, q, mesh }] }
+const grillFood = [];     // { type, q, t, mesh, slot, owner }
 const customers = [];     // party leaders (party members follow them)
 const queue = [], payQueue = []; // ordering line at the counter, payment line at the register
 let msgTimer = 0;
@@ -349,7 +352,7 @@ for (const z of [-4.88, -5.72]) part(new THREE.BoxGeometry(2.9, 0.05, 0.04), iro
 for (const x of [3.05, 5.95]) part(new THREE.BoxGeometry(0.04, 0.05, 0.86), iron, x, 0.94, -5.3);
 // height crank on the front
 const crank = new THREE.Group();
-crank.position.set(3.3, 0.68, -4.82);
+crank.position.set(3.14, 0.62, -4.82);
 part(new THREE.TorusGeometry(0.11, 0.014, 6, 14), iron, 0, 0, 0, crank);
 part(new THREE.BoxGeometry(0.22, 0.02, 0.02), iron, 0, 0, 0, crank);
 part(new THREE.BoxGeometry(0.02, 0.22, 0.02), iron, 0, 0, 0, crank);
@@ -380,10 +383,13 @@ const hood = part(new THREE.CylinderGeometry(0.5, 1.9, 0.7, 4, 1, true).rotateY(
 hood.scale.set(1.49, 1, 0.45);
 hood.castShadow = false;
 part(new THREE.CylinderGeometry(0.16, 0.16, 1.1, 10), hoodMat, 4.8, 3.85, -5.3).castShadow = false;
-const SLOTS = [3.6, 4.5, 5.4];
-const slotCount = () => (has('grill') ? 3 : 2);
-// one lamp per grill slot on the brick front: yellow cooking, green ready, flashing red about to burn
-const slotLights = SLOTS.map(x => part(new THREE.BoxGeometry(0.15, 0.06, 0.02), new THREE.MeshBasicMaterial({ color: 0x333333 }), x, 0.8, -4.84));
+// grill spots [x, z], filled from the middle out: 4 to start, "Bigger Grill" adds 2 per level (front row, back row)
+const SLOTS = [3.95, 5.05, 4.5, 3.4, 5.6].flatMap(x => [[x, -5.12], [x, -5.48]]);
+const slotCount = () => 4 + 2 * lvl('grill');
+const grillSpeed = () => (has('grillq') ? 1.35 : 1);
+// one lamp per spot on the brick front (the upper lamp is the back row): yellow cooking, green ready, flashing red before it burns
+const slotLights = SLOTS.map(([x, z]) => part(new THREE.BoxGeometry(0.15, 0.05, 0.02), new THREE.MeshBasicMaterial({ color: 0x333333 }), x, z < -5.3 ? 0.82 : 0.73, -4.84));
+slotLights.forEach((l, i) => { l.visible = i < slotCount(); });
 
 // Tables
 const clothTex = (() => {
@@ -559,13 +565,15 @@ const foodState = f => {
   return f.t < d.cook ? 'cooking' : f.t < d.cook + d.burn ? 'ready' : 'burnt';
 };
 
-function startCooking(type, q = 0) {
-  const slot = [0, 1, 2].slice(0, slotCount()).find(s => !grillFood.some(f => f.slot === s));
+const freeSlot = () => SLOTS.findIndex((_, i) => i < slotCount() && !grillFood.some(f => f.slot === i));
+const freeSlots = () => SLOTS.filter((_, i) => i < slotCount() && !grillFood.some(f => f.slot === i)).length;
+function startCooking(type, q = 0, owner = null) { // owner: the grill cook for its own pieces
+  const slot = freeSlot();
   const mesh = makeFoodMesh(type);
-  mesh.position.set(SLOTS[slot], 0.97, -5.3);
+  mesh.position.set(SLOTS[slot][0], 0.97, SLOTS[slot][1]);
   mesh.userData.kind = 'food';
   scene.add(mesh);
-  const f = { type, q, t: 0, mesh, slot };
+  const f = { type, q, t: 0, mesh, slot, owner };
   mesh.userData.ref = f;
   grillFood.push(f);
   sfx.cook();
@@ -577,11 +585,21 @@ function removeGrillFood(f) {
   scene.remove(f.mesh);
 }
 
-function pickUp(f) {
+const readyFood = () => grillFood.filter(f => foodState(f) === 'ready');
+function offGrill(f) { // off the grill it is just food (on a tray it must not answer as grill food)
   removeGrillFood(f);
-  if (foodState(f) === 'burnt') { reach(); toast(`Burnt ${FOODS[f.type].name} tossed!`, '#f66'); sfx.bad(); return; }
-  f.mesh.userData = {}; // off the grill: now just a dish (on a plate it must not answer as grill food)
-  hold({ kind: 'cooked', type: f.type, q: f.q, mesh: f.mesh });
+  f.mesh.userData = {};
+  return { type: f.type, q: f.q, mesh: f.mesh };
+}
+function pickUpReady() { // one E takes every ready piece on the grill (mixed dishes are fine)
+  const items = readyFood().map(offGrill);
+  if (held?.kind === 'cooked') { held.items.push(...items); restack(held); reach(); sfx.pick(); } else hold(stack('cooked', items));
+}
+function tossBurnt(f) {
+  removeGrillFood(f);
+  reach();
+  toast(`Burnt ${FOODS[f.type].name} tossed!`, '#f66');
+  sfx.bad();
 }
 
 // ---------- Customers ----------
@@ -686,7 +704,7 @@ function spawnParty() { // a party walks in together; the leader orders and pays
     scene.add(rig.root);
     return rig;
   };
-  const rig = person(0), g = rig.root, mood = new THREE.Sprite(MOOD.warn), pat = gm(PATIENCE.queue) * patienceMult();
+  const rig = person(0), g = rig.root, mood = new THREE.Sprite(MOOD.warn), pat = PATIENCE.queue * patienceMult();
   mood.position.y = 1.98;
   mood.visible = false;
   g.add(mood);
@@ -736,7 +754,7 @@ function takeOrder(c) {
   c.orderedAt = performance.now();
   c.path = seatPath(c.table.seats[0]);
   c.members.forEach(m => { m.state = 'toTable'; m.path = seatPath(c.table.seats[m.seatI]); });
-  toast(`Order: ${orderText(items).replace(/\n/g, ', ')} → Mesa ${c.table.n}`);
+  toast(`Order: ${orderText(items).replace(/\n/g, ', ')} → Table ${c.table.n}`);
   beep(880, 0.08);
 }
 
@@ -747,19 +765,18 @@ function availability() {
   for (const d in trays) a[d] += trays[d].length;
   grillFood.forEach(f => { if (foodState(f) !== 'burnt') a[f.type]++; });
   if (held?.kind === 'whole') a[ITEMS[held.type].dish] += per;
-  else if (held?.kind === 'portion' || held?.kind === 'cooked') a[held.type]++;
   if (busy?.whole) a[ITEMS[busy.whole.type].dish] += per;
-  staff.forEach(e => { if (e.carry && ITEMS[e.carry.type]?.whole) a[ITEMS[e.carry.type].dish] += per; else if (e.carry?.kind === 'cooked') a[e.carry.type]++; });
-  passItems.forEach(p => a[p.type]++);
+  staff.forEach(e => { if (e.carry && ITEMS[e.carry.type]?.whole) a[ITEMS[e.carry.type].dish] += per; });
+  for (const h of [held, ...staff.map(e => e.carry)]) if (h?.kind === 'portion' || h?.kind === 'cooked') h.items.forEach(x => a[x.type]++);
+  passTrays.forEach(t => t.items.forEach(x => { if (x.kind === 'dish') a[x.type]++; }));
   customers.forEach(c => c.items && c.state !== 'exit' && c.items.forEach(i => { if (!i.served) a[i.dish]--; }));
   return a;
 }
-function sauceAvail(s) { // cups still available: station bottle, stored bottles, cups in hands or on plates, minus open orders
+function sauceAvail(s) { // cups still available: station bottle, stored bottles, cups in hands or on trays, minus open orders
   let n = sauceLevel[s] + ITEM_KEYS.reduce((k, id) => k + (ITEMS[id].sauce === s ? stock[id].length * ITEMS[id].cups : 0), 0);
   if (held?.kind === 'bottle' && ITEMS[held.type].sauce === s) n += ITEMS[held.type].cups;
-  if ((held?.kind === 'sauce' && held.type === s) || (held?.kind === 'cooked' && held.sauce === s)) n++;
-  passItems.forEach(p => { if (p.sauce === s) n++; });
-  staff.forEach(e => { if (e.carry?.sauce === s) n++; });
+  if (held?.kind === 'sauce' && held.type === s) n++;
+  passTrays.forEach(t => t.items.forEach(x => { if (x.kind === 'cup' && x.type === s) n++; }));
   customers.forEach(c => c.items && c.state !== 'exit' && c.items.forEach(i => { if (i.sauce === s && !i.sauced) n--; }));
   return n;
 }
@@ -810,23 +827,28 @@ function orderText(items) { // what the table is still missing, one line per dis
 }
 
 const complete = c => c.items.every(i => i.served && (!i.sauce || i.sauced));
-function startEating(c) { if (complete(c)) { c.tipP = c.patience / c.maxPatience; c.state = 'eat'; c.eatT = gm(EAT_MIN); } }
+function tipFactor(c) { // full tip if the food came within 60 s (+15 s per extra dish), falling to nothing at 120 s
+  const k = PATIENCE.perDish * (c.items.length - 1), m = patienceMult();
+  const full = (PATIENCE.foodFull + k) * m, zero = (PATIENCE.foodZero + k) * m;
+  return THREE.MathUtils.clamp((zero - (c.waitT || 0)) / (zero - full), 0, 1);
+}
+function startEating(c) { if (complete(c)) { c.tipP = tipFactor(c); c.state = 'eat'; c.eatT = gm(EAT_MIN); } }
 function openItem(c, type, sauce, server) { // which unserved dish a plate fills (the same sauce first); the server needs an exact match
   const ok = it => !it.served && it.dish === type && !(server && it.claimed);
   let i = c.items.findIndex(it => ok(it) && (it.sauce || null) === (sauce || null));
   if (i < 0 && !server) i = c.items.findIndex(ok);
   return i;
 }
-function serve(c, i, plate) { // plate: { type, q, mesh, sauce } from the player's hands (or the server's)
+function serve(c, i, plate) { // plate: { type, q, mesh } from the player's hands or a table tray
   const it = c.items[i], seat = c.table.seats[it.seat % 4];
   const k = c.items.filter(x => x !== it && x.served && x.seat % 4 === it.seat % 4).length;
   it.served = true;
   it.q = plate.q;
   it.mesh = plate.mesh;
-  if (plate.sauce && plate.sauce === it.sauce) it.sauced = true; // the cup came with the plate
   const p = seat.plate.clone().addScaledVector(seat.side, [0, 0.27, -0.27][k % 3]);
   plate.mesh.position.copy(p);
   plate.mesh.rotation.set(0, 0, 0);
+  plate.mesh.scale.setScalar(1);
   scene.add(plate.mesh);
   c.foods.push(plate.mesh);
   if (k) { // a second dish at the same seat gets its own plate
@@ -838,11 +860,12 @@ function serve(c, i, plate) { // plate: { type, q, mesh, sauce } from the player
   sfx.serve();
   startEating(c);
 }
-function serveSauce(c, i) { // a cup of sauce for a dish that is already on the table
-  const it = c.items[i], cup = held.mesh;
-  dropHeld();
+function serveSauce(c, i, cup) { // a cup of sauce next to a dish that is on the table
+  const it = c.items[i];
   it.sauced = true;
   cup.position.set(0, 0, -0.13);
+  cup.rotation.set(0, 0, 0);
+  cup.scale.setScalar(1);
   it.mesh.add(cup);
   sfx.serve();
   startEating(c);
@@ -874,7 +897,7 @@ function goPay(c) { // the party gets up: the guests head out, the leader queues
   const lane = c.table.seats[0].lane;
   c.path = [lane.clone(), new THREE.Vector3(lane.x, 0, -1), REGISTER_SPOT.clone().add(new THREE.Vector3(0, 0, payQueue.length * 0.9))];
   payQueue.push(c);
-  c.patience = c.maxPatience = gm(PATIENCE.pay) * patienceMult();
+  c.patience = c.maxPatience = PATIENCE.pay * patienceMult();
   c.foods.forEach(m => scene.remove(m));
   c.foods = [];
   c.table.customer = null; // the table is free for the next party
@@ -941,7 +964,8 @@ function updateCustomer(c, dt) {
         c.state = 'wait';
         sit(c.group, c.table.seats[0]);
         setBubble(c, null);
-        c.patience = c.maxPatience = gm(PATIENCE.wait + PATIENCE.perDish * (c.items.length - 1)) * patienceMult();
+        c.waitT = 0; // seconds waited for the food: sets the tip
+        c.patience = c.maxPatience = (PATIENCE.foodLeave + PATIENCE.perDish * (c.items.length - 1)) * patienceMult();
       }
       break;
     case 'eat':
@@ -976,6 +1000,7 @@ function updateCustomer(c, dt) {
 
   if (['queue', 'order', 'wait', 'payLine', 'paying'].includes(c.state)) {
     c.patience -= dt;
+    if (c.state === 'wait') c.waitT += dt;
     const p = c.patience / c.maxPatience;
     c.mood.visible = p < 0.5;
     c.mood.material = p < 0.25 ? MOOD.angry : MOOD.warn;
@@ -1164,8 +1189,8 @@ for (const [x, ry] of [[-7.88, Math.PI / 2], [7.88, -Math.PI / 2]]) {
 }
 
 // ---------- Service counter, sauce station, interior ----------
-// The pass: finished plates wait on the service counter between the grill and the dining room
-const PASS_Z = -3.4, PASS_Y = 1.05, PASS_SLOTS = [3.1, 3.95, 4.8, 5.65, 6.5, 7.35];
+// The pass: one numbered tray per table on the service counter between the grill and the dining room
+const PASS_Z = -3.4, PASS_Y = 1.05;
 const counterWood = mat(0x7a4a25), capWood = mat(0x3a2a1a);
 const pass = box(5.3, 1, 0.5, counterWood, 5.25, 0.5, PASS_Z);
 pass.userData.kind = 'pass';
@@ -1182,37 +1207,121 @@ for (const [w, x] of [[3.55, -1.225], [0.75, 2.225]]) {
   box(w, 1.05, 0.12, counterWood, x, 0.525, PASS_Z);
   box(w + 0.06, 0.05, 0.2, capWood, x, 1.075, PASS_Z, false);
 }
-const passItems = []; // { slot, type, q, sauce, mesh (the food), group (plate + food), claimed }
-function passPut(p) { // put a plated dish { type, q, mesh, sauce } in the first free spot; false when the pass is full
-  const slot = PASS_SLOTS.findIndex((_, i) => !passItems.some(it => it.slot === i));
-  if (slot < 0) return false;
-  const g = new THREE.Group();
-  g.position.set(PASS_SLOTS[slot], PASS_Y, PASS_Z);
-  part(plateGeo, plateMat, 0, 0.006, 0, g);
-  p.mesh.position.set(0, 0.029, 0);
-  p.mesh.rotation.set(0, 0, 0);
-  g.add(p.mesh);
+// table trays: dishes (each gets a plate) and sauce cups collect per table; a complete tray is READY and goes out in one trip
+const DISH_SPOTS = [[-0.36, -0.11], [0, -0.11], [0.36, -0.11], [-0.36, 0.11], [0, 0.11], [0.36, 0.11]];
+const CUP_SPOTS = [[-0.18, -0.11], [0.18, -0.11], [-0.18, 0.11], [0.18, 0.11]];
+const trayMat = mat(0x3b3f45);
+const passTrays = tables.map((tb, i) => {
+  const x = 3.3 + i * 1.3, g = new THREE.Group();
+  g.position.set(x, PASS_Y, PASS_Z);
+  part(new THREE.BoxGeometry(1.1, 0.02, 0.5), trayMat, 0, 0.01, 0, g);
+  for (const [w, d, px, pz] of [[1.1, 0.02, 0, -0.24], [1.1, 0.02, 0, 0.24], [0.02, 0.5, -0.54, 0], [0.02, 0.5, 0.54, 0]]) part(new THREE.BoxGeometry(w, 0.035, d), trayMat, px, 0.028, pz, g);
   scene.add(g);
-  const it = { slot, type: p.type, q: p.q, sauce: p.sauce || null, mesh: p.mesh, group: g, claimed: false };
-  g.userData = { kind: 'plate', ref: it };
-  passItems.push(it);
-  return true;
+  const labels = [plaque('', 0.6, 0.16, x, 0.84, PASS_Z - 0.265, Math.PI), plaque('', 0.6, 0.16, x, 0.84, PASS_Z + 0.265)]; // kitchen and dining side
+  const t = { n: tb.n, x, home: g.position.clone(), group: g, labels, items: [], owner: null, ready: false, claimed: false, away: false, key: '' };
+  g.userData = { kind: 'passTray', ref: t };
+  g.visible = tb.active; // tray 4 comes with "More Tables"
+  labels.forEach(l => { l.visible = tb.active; });
+  return t;
+});
+function trayGuest(t) { // the party this tray is for: sitting down or seated, food not complete
+  const c = tables[t.n - 1].customer;
+  return c && c.items && (c.state === 'toTable' || c.state === 'wait') ? c : null;
 }
-function takeFromPass(it) { // → a plated dish to carry
-  passItems.splice(passItems.indexOf(it), 1);
-  scene.remove(it.group);
-  return { kind: 'cooked', type: it.type, q: it.q, mesh: it.mesh, sauce: it.sauce };
+const onTray = (t, kind, type) => t.items.filter(x => x.kind === kind && x.type === type).length;
+const dishNeed = (t, c, d) => c.items.filter(i => !i.served && i.dish === d).length - onTray(t, 'dish', d);
+const cupNeed = (t, c, k) => c.items.filter(i => i.sauce === k && !i.sauced).length - onTray(t, 'cup', k);
+function trayMissing(t, c) { // what the table still needs on its tray
+  const out = [], add = (k, name) => { if (k > 0) out.push((k > 1 ? `${k}× ` : '') + name); };
+  for (const d in FOODS) add(dishNeed(t, c, d), FOODS[d].name);
+  for (const k in SAUCES) add(cupNeed(t, c, k), SAUCES[k].name);
+  return out;
 }
-function addSauce(it) { // the held cup goes onto a plate waiting at the pass
-  const cup = held.mesh;
-  it.sauce = held.type;
-  dropHeld();
-  cup.position.set(0, 0, -0.13);
-  it.mesh.add(cup);
+function trayFit(t, c, h) { // how many of the carried items this table's tray takes
+  if (!c || t.away) return 0;
+  if (h.kind === 'sauce') return cupNeed(t, c, h.type) > 0 ? 1 : 0;
+  const per = {};
+  h.items.forEach(x => { per[x.type] = (per[x.type] || 0) + 1; });
+  return Object.entries(per).reduce((n, [d, k]) => n + Math.max(0, Math.min(k, dishNeed(t, c, d))), 0);
+}
+function layoutTray(t) { // plates in two rows of three, sauce cups in the gaps between them
+  let d = 0, k = 0;
+  for (const x of t.items) {
+    const [px, pz] = x.kind === 'dish' ? DISH_SPOTS[d++ % DISH_SPOTS.length] : CUP_SPOTS[k++ % CUP_SPOTS.length];
+    if (x.plate) { t.group.add(x.plate); x.plate.position.set(px, 0.026, pz); x.plate.scale.setScalar(0.7); }
+    t.group.add(x.mesh);
+    x.mesh.position.set(px, x.plate ? 0.045 : 0.036, pz);
+    x.mesh.rotation.set(0, 0, 0);
+    x.mesh.scale.setScalar(x.plate ? 0.7 : 1);
+  }
+}
+function trayPut(t, h) { // every dish of the stack this table still needs goes on its tray; the rest stays in the stack
+  const c = trayGuest(t);
+  if (!c || t.away) return;
+  h.items = h.items.filter(x => {
+    if (dishNeed(t, c, x.type) <= 0) return true;
+    t.owner = c;
+    t.items.push({ kind: 'dish', type: x.type, q: x.q, mesh: x.mesh, plate: new THREE.Mesh(plateGeo, plateMat) });
+    return false;
+  });
+  layoutTray(t);
+  restack(h);
+}
+function placeOnTray(t) { // the player puts carried dishes, or a sauce cup, on a table's tray
+  const h = held;
+  if (h.kind === 'sauce') {
+    dropHeld();
+    t.owner = trayGuest(t);
+    t.items.push({ kind: 'cup', type: h.type, mesh: h.mesh });
+    layoutTray(t);
+  } else {
+    trayPut(t, h);
+    if (h.items.length) reach(); else dropHeld();
+  }
+  syncTray(t);
   sfx.serve();
 }
+function clearTray(t) { // anything left on it is thrown out
+  for (const x of t.items) { t.group.remove(x.mesh); if (x.plate) t.group.remove(x.plate); }
+  t.items = [];
+  t.owner = null;
+}
+function syncTray(t) { // clear leftovers of a party that is gone, work out READY, re-letter the tray signs when that changes
+  const c = trayGuest(t);
+  if (!t.away && t.items.length && t.owner !== c) clearTray(t);
+  if (!t.away) t.ready = !!c && t.items.length > 0 && !trayMissing(t, c).length;
+  const key = t.away ? 'out' : t.ready ? 'ready' : 'wait';
+  if (key === t.key) return;
+  t.key = key;
+  for (const l of t.labels) setText(l.userData.face, `TABLE ${t.n}${t.away ? ' · OUT' : t.ready ? ' · READY' : ''}`, t.away ? '#3a3a3a' : t.ready ? '#1f7a34' : '#1a1a1a', '#e8f1f2');
+}
+passTrays.forEach(syncTray);
+function serveTray(t, c) { // everything on the tray goes on the table: dishes first, then their sauce cups
+  for (const x of t.items) if (x.kind === 'dish') {
+    t.group.remove(x.plate);
+    const i = openItem(c, x.type, null, false);
+    if (i >= 0) serve(c, i, x); else t.group.remove(x.mesh);
+  }
+  for (const x of t.items) if (x.kind === 'cup') {
+    const i = c.items.findIndex(it => it.served && it.sauce === x.type && !it.sauced);
+    if (i >= 0) serveSauce(c, i, x.mesh); else t.group.remove(x.mesh);
+  }
+  t.items = [];
+  t.owner = null;
+}
+function takeTray(t) { t.away = true; syncTray(t); hold({ kind: 'tray', tray: t, mesh: t.group }); }
+function returnTray(t) { // back to its spot on the pass
+  t.away = t.claimed = false;
+  t.group.scale.setScalar(1);
+  t.group.rotation.set(0, 0, 0);
+  t.group.position.copy(t.home);
+  scene.add(t.group);
+  syncTray(t);
+}
+function putTrayBack() { const t = held.tray; dropHeld(); returnTray(t); }
+function serveHeldTray(c) { const t = held.tray; dropHeld(); serveTray(t, c); returnTray(t); }
 
-// sauce station: bottles stand in holders; fill a cup, then add it to a plate at the pass or take it to the table
+// sauce station: bottles stand in holders; fill a cup, then put it on its table's tray (or take it to the table)
 const sauceLevel = Object.fromEntries(Object.keys(SAUCES).map(k => [k, 0])); // cups left in each station bottle
 const station = box(1.8, 0.95, 0.5, steel, -0.4, 0.475, -5.64);
 station.userData.kind = 'sauceStation';
@@ -1387,20 +1496,54 @@ function storeCrate() {
   sfx.store();
   toast(`Stored ${crateText(h.crate)} in cold storage`);
 }
-function takeFromBin(id) {
-  const it = ITEMS[id], q = stock[id].shift();
-  refreshStorage();
-  hold({ kind: it.whole ? 'whole' : it.sauce ? 'bottle' : 'portion', type: it.dish && !it.whole ? it.dish : id, q, mesh: makeItemMesh(id) });
+function stack(kind, items) { // raw portions (one kind, up to MAX_CARRY) or grilled pieces (any mix), carried as a small pile
+  const h = { kind, type: kind === 'portion' ? items[0].type : null, items, mesh: new THREE.Group() };
+  restack(h);
+  return h;
 }
-function takeFromTray(d) {
-  const q = trays[d].shift();
-  refreshTrays();
-  hold({ kind: 'portion', type: d, q, mesh: makeFoodMesh(d) });
+function restack(h) {
+  h.mesh.clear();
+  h.items.forEach((x, i) => {
+    h.mesh.add(x.mesh);
+    x.mesh.position.set(0, i * 0.045, 0);
+    x.mesh.rotation.set(0, i * 0.6, 0);
+    x.mesh.scale.setScalar(0.55);
+  });
+}
+function takePortion(type, src, refresh, mk) { // E adds one raw portion to the stack in hand
+  const h = held;
+  if (!src.length || (h && !(h.kind === 'portion' && h.type === type && h.items.length < MAX_CARRY))) return;
+  const x = { type, q: src.shift(), mesh: mk() };
+  refresh();
+  if (h) { h.items.push(x); restack(h); reach(); sfx.pick(); } else hold(stack('portion', [x]));
+}
+function takeFromBin(id) {
+  const it = ITEMS[id];
+  if (!it.whole && !it.sauce) return takePortion(it.dish, stock[id], refreshStorage, () => makeItemMesh(id));
+  const q = stock[id].shift();
+  refreshStorage();
+  hold({ kind: it.whole ? 'whole' : 'bottle', type: id, q, mesh: makeItemMesh(id) });
+}
+function takeFromTray(d) { takePortion(d, trays[d], refreshTrays, () => makeFoodMesh(d)); }
+function grillHeld() { // one E puts every carried raw portion on a free spot; the rest stays in hand
+  const h = held;
+  while (h.items.length && freeSlot() >= 0) startCooking(h.type, h.items.shift().q);
+  if (h.items.length) { restack(h); reach(); } else dropHeld();
+}
+function serveHeld(c) { // straight from the hands: every carried dish the table still needs
+  const h = held;
+  h.items = h.items.filter(x => {
+    const i = openItem(c, x.type, null, false);
+    if (i < 0) return true;
+    serve(c, i, x);
+    return false;
+  });
+  if (h.items.length) { restack(h); reach(); } else dropHeld();
 }
 const binOf = h => (h.kind === 'whole' || h.kind === 'bottle' ? h.type : ITEMS[h.type] && !ITEMS[h.type].whole ? h.type : null); // null: goes on a tray
-function putBack() {
-  const h = held, b = binOf(h);
-  if (b) stock[b].unshift(h.q); else trays[h.type].unshift(h.q);
+function putBack() { // a stack goes back whole
+  const h = held, b = binOf(h), qs = h.items ? h.items.map(x => x.q) : [h.q];
+  (b ? stock[b] : trays[h.type]).unshift(...qs);
   dropHeld();
   refreshStorage();
   refreshTrays();
@@ -1440,7 +1583,7 @@ function updateBusy(dt) {
 
 // ---------- Staff: role-based employees (hire cost, daily wage, a small state machine per role) ----------
 const staff = [];
-const STAFF_HOME = { prep: new THREE.Vector3(2.2, 0, -8.8), server: new THREE.Vector3(2, 0, -2.7), grill: new THREE.Vector3(5, 0, -4.2) };
+const STAFF_HOME = { prep: new THREE.Vector3(2.2, 0, -8.8), server: new THREE.Vector3(2, 0, -2.7), grill: new THREE.Vector3(4.5, 0, -4.3) };
 const hired = role => staff.some(e => e.role === role);
 const wages = () => staff.reduce((n, e) => n + ROLES[e.role].wage, 0);
 function hire(role) {
@@ -1482,57 +1625,101 @@ const STAFF_AI = {
       e.path = [STAFF_HOME.prep.clone()];
     } else if (e.state === 'back' && arrived) { e.state = 'idle'; e.t = 2; }
   },
-  server(e, dt) { // wait → take a plate that matches an open order from the pass → serve it at the table → return
+  server(e, dt) { // wait → carry a READY table tray to its table in one trip → bring the empty tray back
     const arrived = stepPath(e, dt), home = () => { e.state = 'back'; e.task = null; e.path = [new THREE.Vector3(e.group.position.x, 0, -1), STAFF_HOME.server.clone()]; };
     if (e.state === 'idle' && (e.t -= dt) <= 0) {
       e.t = 0.5;
-      for (const it of passItems) {
-        const m = !it.claimed && findOrder(it.type, it.sauce);
-        if (!m) continue;
-        it.claimed = m.c.items[m.i].claimed = true;
-        e.task = { it, ...m };
-        e.state = 'toPass';
-        e.path = [new THREE.Vector3(PASS_SLOTS[it.slot], 0, -2.8)];
-        break;
-      }
+      const t = passTrays.find(t => t.ready && !t.claimed && !t.away);
+      if (t) { t.claimed = true; e.task = { t, c: t.owner }; e.state = 'toPass'; e.path = [new THREE.Vector3(t.x, 0, -2.8)]; }
     } else if (e.state === 'toPass' && arrived) {
-      const { it, c, i } = e.task;
-      it.claimed = c.items[i].claimed = false;
-      if (!passItems.includes(it) || c.state !== 'wait' || c.items[i].served) return home();
-      c.items[i].claimed = true;
-      e.carry = takeFromPass(it);
-      e.tray = new THREE.Group();
-      e.tray.add(new THREE.Mesh(plateGeo, plateMat), e.carry.mesh);
-      e.carry.mesh.position.set(0, 0.023, 0);
-      e.tray.position.set(0, 1.08, 0.36);
-      e.rig.body.add(e.tray);
-      const lane = c.table.seats[c.items[i].seat % 4].lane;
+      const { t, c } = e.task;
+      if (!t.ready || t.away || t.owner !== c) { t.claimed = false; return home(); }
+      t.away = true;
+      syncTray(t);
+      e.carry = t;
+      t.group.scale.setScalar(0.75);
+      t.group.position.set(0, 1.07, 0.42);
+      e.rig.body.add(t.group);
+      const lane = c.table.seats[0].lane;
       e.state = 'deliver';
       e.path = [new THREE.Vector3(lane.x, 0, -1), lane.clone()];
     } else if (e.state === 'deliver' && arrived) {
-      const { c, i } = e.task;
-      c.items[i].claimed = false;
-      const j = c.state === 'wait' ? openItem(c, e.carry.type, e.carry.sauce, true) : -1;
-      e.rig.body.remove(e.tray);
-      if (j >= 0) { serve(c, j, e.carry); e.carry = null; return home(); }
-      e.rig.body.add(e.tray); // the guests left or the dish was already served: take it back to the pass
+      const { t, c } = e.task;
+      if (c.state === 'wait' && c.table.customer === c) serveTray(t, c); else clearTray(t); // the party left: the food is thrown out
       e.state = 'return';
-      e.path = [new THREE.Vector3(e.group.position.x, 0, -1), new THREE.Vector3(4.8, 0, -2.8)];
+      e.path = [new THREE.Vector3(e.group.position.x, 0, -1), new THREE.Vector3(t.x, 0, -2.8)];
     } else if (e.state === 'return' && arrived) {
-      e.rig.body.remove(e.tray);
-      passPut(e.carry);
+      returnTray(e.task.t);
       e.carry = null;
       home();
     } else if (e.state === 'back' && arrived) { e.state = 'idle'; e.t = 0.5; }
   },
+  grill(e, dt) { // raw portions open orders need → free grill spots → off the grill when ready → the right table trays
+    const arrived = stepPath(e, dt), spot = STAFF_HOME.grill, mine = grillFood.filter(f => f.owner === e);
+    const carry = h => { e.carry = h; h.mesh.position.set(0, 1.05, 0.32); e.rig.body.add(h.mesh); };
+    const drop = () => { e.rig.body.remove(e.carry.mesh); e.carry = null; };
+    if ((e.state === 'idle' || e.state === 'back') && arrived) {
+      e.state = 'idle';
+      e.group.rotation.y = Math.PI; // facing the grill
+      if ((e.t -= dt) > 0) return;
+      e.t = 0.4;
+      const ready = mine.filter(f => foodState(f) === 'ready');
+      if (ready.length) { // never lets them burn: they come off as soon as they're ready
+        carry(stack('cooked', ready.map(offGrill)));
+        e.task = trayFor(e.carry);
+        if (e.task) { e.state = 'toTray'; e.path = [new THREE.Vector3(e.task.x, 0, -3.95)]; } else drop(); // nobody needs them anymore
+        return;
+      }
+      const need = grillNeed(), free = freeSlots();
+      const d = Object.keys(FOODS).filter(k => need[k] > 0 && portionSrc(k).length).sort((a, b) => need[b] - need[a])[0];
+      if (!d || !free || mine.some(f => burnIn(f) < (d in trays ? 10 : 13) + 3)) return; // leaves only if nothing of its own could burn meanwhile
+      e.task = { type: d, n: Math.min(MAX_CARRY, free, need[d]) };
+      e.state = 'fetch';
+      e.path = [...KITCHEN_WAY.map(v => v.clone()), fetchSpot(d)];
+    } else if (e.state === 'fetch' && arrived) {
+      const { type, n } = e.task, src = portionSrc(type), items = [];
+      while (items.length < n && src.length) items.push({ type, q: src.shift(), mesh: makeFoodMesh(type) });
+      refreshStorage();
+      refreshTrays();
+      if (items.length) carry(stack('portion', items));
+      e.state = 'toGrill';
+      e.path = [...KITCHEN_WAY.map(v => v.clone()).reverse(), spot.clone()];
+    } else if (e.state === 'toGrill' && arrived) {
+      const h = e.carry;
+      if (h) {
+        while (h.items.length && freeSlot() >= 0) startCooking(h.type, h.items.shift().q, e);
+        if (h.items.length) { portionSrc(h.type).unshift(...h.items.map(x => x.q)); refreshStorage(); refreshTrays(); } // spots taken meanwhile: back on the shelf
+        drop();
+      }
+      e.state = 'idle';
+      e.t = 0;
+    } else if (e.state === 'toTray' && arrived) {
+      e.group.rotation.y = 0; // facing the pass
+      trayPut(e.task, e.carry);
+      syncTray(e.task);
+      e.task = e.carry.items.length ? trayFor(e.carry) : null;
+      if (e.task) { e.path = [new THREE.Vector3(e.task.x, 0, -3.95)]; return; }
+      drop(); // anything nobody needs anymore is thrown out
+      e.state = 'back';
+      e.path = [spot.clone()];
+    }
+  },
 };
-function findOrder(type, sauce) { // the least patient seated party still waiting for this plate
-  const waiting = customers.filter(c => c.state === 'wait').sort((a, b) => a.patience / a.maxPatience - b.patience / b.maxPatience);
-  for (const c of waiting) {
-    const i = openItem(c, type, sauce, true);
-    if (i >= 0) return { c, i };
-  }
-  return null;
+const KITCHEN_WAY = [new THREE.Vector3(2.3, 0, -4.3), new THREE.Vector3(1.8, 0, -5.4), new THREE.Vector3(1.8, 0, -6.7)]; // grill area → kitchen doorway
+const portionSrc = d => (d in trays ? trays[d] : ITEMS[d] && !ITEMS[d].whole ? stock[d] : []); // cut portions, or pre-portioned dishes in cold storage
+const fetchSpot = d => new THREE.Vector3(d in trays ? trayObjs.find(o => o.d === d).t.position.x : bins.find(b => b.id === d).x, 0, d in trays ? -7.35 : -10.6);
+const burnIn = f => { const d = FOODS[f.type]; return f.t < d.cook ? (d.cook - f.t) / grillSpeed() + d.burn : d.cook + d.burn - f.t; }; // seconds until it burns
+function grillNeed() { // dishes open orders still need that nobody is cooking, carrying or has put on a tray
+  const n = Object.fromEntries(Object.keys(FOODS).map(d => [d, 0]));
+  customers.forEach(c => c.items && (c.state === 'toTable' || c.state === 'wait') && c.items.forEach(i => { if (!i.served) n[i.dish]++; }));
+  passTrays.forEach(t => t.items.forEach(x => { if (x.kind === 'dish') n[x.type]--; }));
+  grillFood.forEach(f => { if (foodState(f) !== 'burnt') n[f.type]--; });
+  for (const h of [held, ...staff.map(e => e.carry)]) if (h?.kind === 'portion' || h?.kind === 'cooked') h.items.forEach(x => n[x.type]--);
+  return n;
+}
+function trayFor(h) { // the tray of the least patient table that takes something from this stack
+  return passTrays.filter(t => trayFit(t, trayGuest(t), h) > 0)
+    .sort((a, b) => { const x = trayGuest(a), y = trayGuest(b); return x.patience / x.maxPatience - y.patience / y.maxPatience; })[0] || null;
 }
 function updateStaff(dt) {
   for (const e of staff) {
@@ -1574,13 +1761,14 @@ function closeRestaurant() { // parties eating or waiting to pay settle up, ever
   }
   queue.length = payQueue.length = 0;
   [...grillFood].forEach(removeGrillFood);
-  passItems.splice(0).forEach(p => scene.remove(p.group)); // leftover plates are thrown out
-  for (const e of staff) if (e.role === 'server') {
-    if (e.carry) e.rig.body.remove(e.tray);
+  for (const e of staff) if (e.role !== 'prep') { // the server and the grill cook put down what they carry
+    if (e.role === 'server' && e.carry) returnTray(e.carry); else if (e.carry) e.rig.body.remove(e.carry.mesh);
     e.carry = e.task = null;
     e.state = 'back';
-    e.path = [STAFF_HOME.server.clone()];
+    e.path = [STAFF_HOME[e.role].clone()];
   }
+  if (held?.kind === 'tray') putTrayBack();
+  passTrays.forEach(clearTray); // leftover dishes are thrown out
   const w = wages();
   money -= w;
   today.staff += w;
@@ -1690,7 +1878,11 @@ function buyUpgrade(u) {
   money -= cost;
   today.upgrades += cost;
   u.level++;
-  if (u.id === 'tables') tables[3].active = tables[3].col.on = tables[3].group.visible = true;
+  if (u.id === 'tables') {
+    tables[3].active = tables[3].col.on = tables[3].group.visible = true;
+    passTrays[3].group.visible = true; // its tray on the pass
+    passTrays[3].labels.forEach(l => { l.visible = true; });
+  }
   if (u.id === 'interior') decor.visible = true;
   if (u.id === 'cold') freezer.visible = freezerCol.on = true;
   if (u.id === 'storage') extraShelf.g.visible = extraShelf.col.on = true;
@@ -1958,37 +2150,44 @@ function getAction(o) {
     return { label: !isOpen ? 'Counter: the restaurant is closed' : queue.length ? 'Guest coming…' : 'No guests waiting' };
   }
   if (kind === 'food') {
-    if (h) return getAction(grill);
-    const st = foodState(ref), name = FOODS[ref.type].name;
+    if (h && h.kind !== 'cooked') return getAction(grill);
+    const ready = readyFood().length, st = foodState(ref), name = FOODS[ref.type].name;
+    if (ready) return { label: `[E] Pick up ${ready} ready piece${ready > 1 ? 's' : ''}`, fn: pickUpReady };
     if (st === 'cooking') return { label: `${name} cooking… ${Math.floor(ref.t / FOODS[ref.type].cook * 100)}%` };
-    if (st === 'ready') return { label: `[E] Pick up ${name}`, fn: () => pickUp(ref) };
-    return { label: `[E] Toss burnt ${name}`, fn: () => pickUp(ref) };
+    return { label: `[E] Toss burnt ${name}`, fn: () => tossBurnt(ref) };
   }
   if (kind === 'grill') {
-    if (!h) return { label: 'Parrilla: bring a raw portion to grill it' };
+    const ready = readyFood().length, pick = ready && { label: `[E] Pick up ${ready} ready piece${ready > 1 ? 's' : ''}`, fn: pickUpReady };
+    if (!h) return pick || { label: 'Parrilla: bring raw portions to grill them' };
     if (h.kind === 'portion') {
-      if (grillFood.length >= slotCount()) return { label: 'Grill full' };
-      return { label: `[E] Grill ${FOODS[h.type].name}`, fn: () => { dropHeld(); startCooking(h.type, h.q); } };
+      const free = freeSlots(), n = Math.min(free, h.items.length);
+      if (!free) return { label: 'Grill full' };
+      return { label: `[E] Grill ${n}× ${FOODS[h.type].name}${n < h.items.length ? ` (${h.items.length - n} stay in hand: grill full)` : ''}`, fn: grillHeld };
     }
-    if (h.kind === 'cooked') return { label: `[E] Discard ${FOODS[h.type].name}`, fn: dropHeld };
+    if (h.kind === 'cooked') return pick || { label: `[E] Discard ${heldName()}`, fn: dropHeld };
     if (h.kind === 'whole') return { label: `Cut the ${ITEMS[h.type].name} at the prep station first` };
     return { label: 'Hands full' };
   }
   if (kind === 'table') {
     const c = ref.customer;
-    if (!c || !['wait', 'eat', 'toTable'].includes(c.state)) return { label: `Mesa ${ref.n}` };
-    if (c.state === 'eat') return { label: `Mesa ${ref.n} is eating` };
+    if (h?.kind === 'tray') {
+      if (h.tray.n !== ref.n) return { label: `This is Table ${h.tray.n}'s tray` };
+      if (!c || c.state !== 'wait') return { label: `Table ${ref.n} isn't waiting for food: put the tray back on the service counter` };
+      return { label: `[E] Serve Table ${ref.n}`, fn: () => serveHeldTray(c) };
+    }
+    if (!c || !['wait', 'eat', 'toTable'].includes(c.state)) return { label: `Table ${ref.n}` };
+    if (c.state === 'eat') return { label: `Table ${ref.n} is eating` };
     const wants = orderText(c.items).replace(/\n/g, ', ');
-    if (c.state === 'toTable') return { label: `Mesa ${ref.n} wants: ${wants}` };
+    if (c.state === 'toTable') return { label: `Table ${ref.n} wants: ${wants}` };
     if (h?.kind === 'sauce') {
       const i = c.items.findIndex(it => it.served && it.sauce === h.type && !it.sauced);
-      if (i < 0) return { label: `Mesa ${ref.n} doesn't need ${SAUCES[h.type].name} now (wants ${wants})` };
-      return { label: `[E] Serve ${SAUCES[h.type].name} with the ${FOODS[c.items[i].dish].name}`, fn: () => serveSauce(c, i) };
+      if (i < 0) return { label: `Table ${ref.n} doesn't need ${SAUCES[h.type].name}` };
+      return { label: `[E] Serve ${SAUCES[h.type].name} with the ${FOODS[c.items[i].dish].name}`, fn: () => { const cup = held.mesh; dropHeld(); serveSauce(c, i, cup); } };
     }
-    if (h?.kind !== 'cooked') return { label: `Mesa ${ref.n} wants: ${wants} · patience ${Math.max(0, Math.round(100 * c.patience / c.maxPatience))}%` };
-    const i = openItem(c, h.type, h.sauce, false);
-    if (i < 0) return { label: `Mesa ${ref.n} didn't order ${FOODS[h.type].name} (wants ${wants})` };
-    return { label: `[E] Serve ${heldName().replace(/^grilled /, '')}`, fn: () => { const p = held; dropHeld(); serve(c, i, p); } };
+    if (h?.kind !== 'cooked') return { label: `Table ${ref.n} wants: ${wants} · patience ${Math.max(0, Math.round(100 * c.patience / c.maxPatience))}%` };
+    const n = h.items.filter((x, k) => h.items.slice(0, k).filter(y => y.type === x.type).length < c.items.filter(i => !i.served && i.dish === x.type).length).length;
+    if (!n) return { label: `Table ${ref.n} doesn't need ${carriedNames(h)}` };
+    return { label: `[E] Serve ${n} dish${n > 1 ? 'es' : ''} to Table ${ref.n}`, fn: () => serveHeld(c) };
   }
   if (kind === 'sign' || kind === 'door') {
     if (isOpen) return { label: '[E] CLOSE RESTAURANT', fn: closeRestaurant };
@@ -1997,12 +2196,13 @@ function getAction(o) {
   }
   if (kind === 'crate') return h ? { label: 'Hands full' } : { label: `[E] Pick up crate: ${crateText(ref)}`, fn: () => pickUpCrate(ref) };
   if (kind === 'bin') {
-    const n = stock[ref].length, name = ITEMS[ref].name;
+    const n = stock[ref].length, it = ITEMS[ref], name = it.name, portion = !it.whole && !it.sauce;
     if (h?.kind === 'crate') return { label: `[E] Store ${crateText(h.crate)}`, fn: storeCrate };
-    if (h && (h.kind === 'whole' || h.kind === 'portion' || h.kind === 'bottle') && binOf(h) === ref) return { label: `[E] Put back ${name}`, fn: putBack };
+    if (h?.kind === 'portion' && portion && h.type === it.dish) return morePortions(h, n, name, () => takeFromBin(ref));
+    if (h && (h.kind === 'whole' || h.kind === 'bottle') && binOf(h) === ref) return { label: `[E] Put back ${name}`, fn: putBack };
     if (h) return { label: 'Hands full' };
     if (!n) return { label: `${name}: empty. Order more at the office terminal` };
-    return { label: `[E] Take ${name}${qTag(stock[ref][0])} (${n} left)`, fn: () => takeFromBin(ref) };
+    return { label: `[E] Take ${name}${qTag(stock[ref][0])} (${n} left)${portion ? ' · hold E for more' : ''}`, fn: () => takeFromBin(ref), repeat: portion };
   }
   if (kind === 'prep') {
     if (h?.kind === 'whole') return { label: `[E] PREPARE ${ITEMS[h.type].name.toUpperCase()}`, fn: startPrep };
@@ -2010,33 +2210,32 @@ function getAction(o) {
   }
   if (kind === 'tray') {
     const n = trays[ref].length, name = FOODS[ref].name;
-    if (h?.kind === 'portion' && h.type === ref) return { label: `[E] Put back ${name} portion`, fn: putBack };
+    if (h?.kind === 'portion' && h.type === ref) return morePortions(h, n, `${name} portion`, () => takeFromTray(ref));
     if (h) return { label: 'Hands full' };
     if (!n) return { label: `No ${name} portions yet: cut a whole ${name} first` };
-    return { label: `[E] Take ${name} portion${qTag(trays[ref][0])} (${n} left)`, fn: () => takeFromTray(ref) };
+    return { label: `[E] Take ${name} portion${qTag(trays[ref][0])} (${n} left) · hold E for more`, fn: () => takeFromTray(ref), repeat: true };
   }
   if (kind === 'register') {
     if (camera.position.z > -3.85) return { label: 'Register: step behind the counter to use it' };
     return { label: posCur() ? '[E] USE REGISTER · a guest is waiting to pay' : '[E] USE REGISTER', fn: openPOS };
   }
   if (kind === 'pass') {
-    if (h?.kind === 'cooked') {
-      if (passItems.length >= PASS_SLOTS.length) return { label: 'Service counter full' };
-      return { label: `[E] Place ${heldName()} on the service counter`, fn: () => { const p = held; dropHeld(); passPut(p); sfx.serve(); } };
-    }
-    if (h?.kind === 'sauce') return { label: 'Look at a plate on the service counter to add the sauce' };
-    return { label: hired('server') ? 'Service counter: the server takes plates from here to the tables' : 'Service counter: put finished plates here' };
+    if (h?.kind === 'tray') return { label: `[E] Put Table ${h.tray.n}'s tray back`, fn: putTrayBack };
+    return { label: 'Service counter: put dishes and sauce cups on the tray of their table' };
   }
-  if (kind === 'plate') {
-    const name = FOODS[ref.type].name + (ref.sauce ? ` + ${SAUCES[ref.sauce].short}` : '');
-    if (h?.kind === 'sauce') {
-      if (ref.sauce) return { label: `${name} already has a sauce` };
-      if (!SAUCES[h.type].dishes.includes(ref.type)) return { label: `${SAUCES[h.type].name} doesn't go with ${FOODS[ref.type].name}` };
-      return { label: `[E] Add ${SAUCES[h.type].name} to the ${FOODS[ref.type].name}`, fn: () => addSauce(ref) };
+  if (kind === 'passTray') {
+    const t = ref, c = trayGuest(t), n = t.n;
+    if (h?.kind === 'tray') return h.tray === t ? { label: `[E] Put Table ${n}'s tray back`, fn: putTrayBack } : { label: 'Hands full' };
+    if (h?.kind === 'cooked' || h?.kind === 'sauce') {
+      const k = trayFit(t, c, h);
+      if (!k) return { label: `Table ${n} doesn't need ${carriedNames(h)}` };
+      return { label: `[E] Put ${h.kind === 'sauce' ? SAUCES[h.type].name : `${k} dish${k > 1 ? 'es' : ''}`} on Table ${n}'s tray`, fn: () => placeOnTray(t) };
     }
-    if (h) return getAction(pass);
-    if (ref.claimed) return { label: `${name}: the server is coming for it` };
-    return { label: `[E] Take ${name}${qTag(ref.q)}`, fn: () => hold(takeFromPass(ref)) };
+    if (h) return { label: 'Hands full' };
+    if (t.claimed) return { label: `Table ${n}'s tray is READY: the server is coming for it` };
+    if (t.ready) return { label: `[E] Take Table ${n}'s tray (READY)`, fn: () => takeTray(t) };
+    if (!c) return { label: `Table ${n}'s tray: no open order` };
+    return { label: `Table ${n}'s tray needs: ${trayMissing(t, c).join(', ')}` };
   }
   if (kind === 'sauce' || kind === 'sauceStation') {
     const k = kind === 'sauce' ? ref : h?.kind === 'bottle' ? ITEMS[h.type].sauce : h?.kind === 'sauce' ? h.type : null;
@@ -2061,8 +2260,15 @@ function heldName() {
   if (h.kind === 'whole') return ITEMS[h.type].name + qTag(h.q);
   if (h.kind === 'bottle') return `a bottle of ${ITEMS[h.type].name}`;
   if (h.kind === 'sauce') return `a cup of ${SAUCES[h.type].name}`;
-  return `${h.kind === 'cooked' ? 'grilled' : 'raw'} ${FOODS[h.type].name}${h.sauce ? ` + ${SAUCES[h.sauce].short}` : ''}${qTag(h.q)}`;
+  if (h.kind === 'tray') return `Table ${h.tray.n}'s tray`;
+  const per = {};
+  h.items.forEach(x => { per[x.type] = (per[x.type] || 0) + 1; });
+  return Object.entries(per).map(([d, k]) => `${k}× ${h.kind === 'cooked' ? 'grilled' : 'raw'} ${FOODS[d].name}`).join(', ');
 }
+const carriedNames = h => (h.kind === 'sauce' ? SAUCES[h.type].name : [...new Set(h.items.map(x => FOODS[x.type].name))].join(' or '));
+const morePortions = (h, n, name, fn) => (h.items.length < MAX_CARRY && n
+  ? { label: `[E] Take another ${name} (${h.items.length + 1}/${MAX_CARRY}) · hold E for more`, fn, repeat: true }
+  : { label: `[E] Put back ${h.items.length}× ${name}`, fn: putBack });
 
 const raycaster = new THREE.Raycaster();
 raycaster.far = 3.2;
@@ -2077,7 +2283,7 @@ function updateInteraction() {
   }
   raycaster.setFromCamera(center, camera);
   const people = customers.filter(c => c.state !== 'exit').flatMap(c => [c.group, ...c.members.map(m => m.group)]);
-  const targets = [...fixedTargets, ...grillFood.map(f => f.mesh), ...tables.filter(t => t.active).map(t => t.group), ...people, ...crates.map(c => c.mesh), ...passItems.map(p => p.group)];
+  const targets = [...fixedTargets, ...grillFood.map(f => f.mesh), ...tables.filter(t => t.active).map(t => t.group), ...people, ...crates.map(c => c.mesh), ...passTrays.filter(t => !t.away && t.group.visible).map(t => t.group)];
   const hit = raycaster.intersectObjects(targets, true)[0];
   const o = hit && customerTarget(hit.object);
   currentAction = o && !busy ? getAction(o) : null;
@@ -2099,7 +2305,7 @@ function hintText() { // one line telling the player what to do next
   if (isOpen) {
     if (clockMin >= CLOSE_AT) return 'Closing time: finish the last tables, then CLOSE at the sign by the front door';
     if (posCur() && uiMode !== 'pos') return 'A guest is waiting at the REGISTER to pay';
-    return passItems.length && !hired('server') ? 'Plates are waiting on the SERVICE counter: take them to the tables' : '';
+    return !hired('server') && passTrays.some(t => t.ready && !t.away) ? 'A tray is READY on the SERVICE counter: take it to its table' : '';
   }
   if (held?.kind === 'crate') return 'Carry the crate to COLD STORAGE in the back of house and press E';
   if (crates.length) return 'Crates are waiting in the DELIVERY area: go through the KITCHEN and out the back door';
@@ -2120,7 +2326,7 @@ function drawScreens(dt) { // counter POS + kitchen display: active orders per t
   screenT = 0.3;
   const rows = [];
   for (const c of customers.filter(c => c.items && ['toTable', 'wait', 'eat'].includes(c.state)).sort((a, b) => a.table.n - b.table.n)) {
-    rows.push([`TABLE ${c.table.n} (${1 + c.members.length})`, c.state === 'eat' ? 'EATING' : c.state === 'toTable' ? 'SEATING' : 'WAITING', 1]);
+    rows.push([`TABLE ${c.table.n} (${1 + c.members.length})`, c.state === 'eat' ? 'EATING' : c.state === 'toTable' ? 'SEATING' : passTrays[c.table.n - 1].ready ? 'TRAY READY' : 'WAITING', 1]);
     const n = {};
     for (const i of c.items) {
       const e = (n[i.dish + (i.sauce ? '+' + i.sauce : '')] ||= [0, 0, 0]);
@@ -2195,7 +2401,10 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (uiMode === 'pos') return posKey(e);
   if (e.code === 'Escape' && uiMode === 'os') closeUI();
-  if (e.code === 'KeyE' && document.pointerLockElement && !uiMode && !busy && currentAction && currentAction.fn) currentAction.fn();
+  if (e.code === 'KeyE' && document.pointerLockElement && !uiMode && !busy && currentAction?.fn && (!e.repeat || currentAction.repeat)) {
+    currentAction.fn();
+    updateInteraction(); // holding E keeps grabbing while the action allows it
+  }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -2256,24 +2465,24 @@ handL.add(handCup);
 const stream = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 1, 5), handSauce);
 stream.visible = false;
 hands.add(stream);
+const holdSlot = new THREE.Group(); // carried things sit small in the lower right, clear of the crosshair and the prompt
+hands.add(holdSlot);
+const HELD_SCALE = { crate: 0.55, whole: 0.5, bottle: 0.8, tray: 0.32 };
 const HAND_POSE = { // camera space: hands [x, y, z, rotX, rotZ], held item [x, y, z]
   none: { L: [-0.3, -0.75, -0.42, 0, 0], R: [0.3, -0.75, -0.42, 0, 0], item: [0, -0.6, -0.5] },
-  hold: { L: [-0.15, -0.31, -0.5, 0, 0.35], R: [0.15, -0.31, -0.5, 0, -0.35], item: [0, -0.265, -0.53] },
-  crate: { L: [-0.22, -0.31, -0.6, 0, 1.45], R: [0.22, -0.31, -0.6, 0, -1.45], item: [0, -0.42, -0.62] },
+  hold: { L: [-0.3, -0.75, -0.42, 0, 0], R: [0.37, -0.37, -0.52, 0.1, -0.5], item: [0.4, -0.25, -0.58] },
   cut: { L: [-0.16, -0.36, -0.52, 0.3, 0.2], R: [0.13, -0.31, -0.5, 0, -0.15], item: [0, -0.6, -0.5] },
-  one: { L: [-0.3, -0.75, -0.42, 0, 0], R: [0.16, -0.33, -0.48, 0, -0.25], item: [0.16, -0.24, -0.5] }, // a bottle or a cup
   pour: { L: [-0.05, -0.31, -0.46, 0.2, 0.25], R: [0.12, -0.2, -0.46, 0, -0.35], item: [0, -0.6, -0.5] },
 };
 let reachT = 1, bobT = 0;
 function reach() { reachT = 0; } // quick pick-up / place motion
-function hold(h) { held = h; hands.add(h.mesh); reach(); sfx.pick(); }
-function dropHeld() { if (held) hands.remove(held.mesh); held = null; reach(); }
+function hold(h) { held = h; h.mesh.position.set(0, 0, 0); holdSlot.add(h.mesh); reach(); sfx.pick(); }
+function dropHeld() { if (held) holdSlot.remove(held.mesh); held = null; reach(); }
 const tmpV = new THREE.Vector3(), tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
 function updateHands(dt, moving) {
   reachT = Math.min(1, reachT + dt / 0.3);
   const r = Math.sin(Math.PI * reachT), k = Math.min(1, dt * 14);
-  const one = held?.kind === 'bottle' || held?.kind === 'sauce';
-  const P = HAND_POSE[busy ? busy.kind : !held ? 'none' : held.kind === 'crate' ? 'crate' : one ? 'one' : 'hold'];
+  const P = HAND_POSE[busy ? busy.kind : held ? 'hold' : 'none'];
   if (moving) bobT += dt * 9;
   const bob = Math.sin(bobT) * 0.012, chop = busy?.kind === 'cut' ? Math.abs(Math.sin(busy.t * 11)) : 0;
   for (const [h, p, c] of [[handL, P.L, 0], [handR, P.R, chop]]) {
@@ -2295,10 +2504,9 @@ function updateHands(dt, moving) {
     stream.scale.set(1, tmpA.distanceTo(tmpB), 1);
     stream.quaternion.setFromUnitVectors(UP, tmpB.sub(tmpA).normalize());
   }
-  handPlate.visible = held?.kind === 'cooked';
   const [x, y, z] = P.item;
-  if (held) held.mesh.position.set(x, y + bob + r * 0.04, z - r * 0.1);
-  handPlate.position.set(x, y - 0.025 + bob + r * 0.04, z - r * 0.1);
+  holdSlot.position.set(x, y + bob + r * 0.04, z - r * 0.1);
+  holdSlot.scale.setScalar(held ? HELD_SCALE[held.kind] || 1 : 1);
 }
 
 // ---------- Loop ----------
@@ -2318,9 +2526,9 @@ function frame() {
       if (clockMin < CLOSE_AT) updateDemand(dt);
     }
 
-    const speed = has('grillq') ? 1.35 : 1;
+    const speed = grillSpeed();
     for (const f of [...grillFood]) {
-      f.t += dt * speed;
+      f.t += dt * (f.t < FOODS[f.type].cook ? speed : 1); // Better Grill speeds up cooking, never the burn window
       const d = FOODS[f.type], st = foodState(f);
       const col = new THREE.Color().setRGB(...d.raw);
       if (st === 'cooking') col.lerp(new THREE.Color(1, 1, 1), f.t / d.cook);
@@ -2332,12 +2540,13 @@ function frame() {
       const f = grillFood.find(g => g.slot === i), st = f && foodState(f), d = f && FOODS[f.type];
       l.visible = i < slotCount();
       l.material.color.setHex(!f ? 0x333333 : st === 'cooking' ? 0xffb020 : st === 'burnt' ? 0x140404
-        : f.t - d.cook > d.burn * 0.6 && Math.floor(f.t * 4) % 2 ? 0xff2a2a : 0x2ee060);
+        : f.t - d.cook > d.burn - BURN_WARN && Math.floor(f.t * 4) % 2 ? 0xff2a2a : 0x2ee060);
     });
     if (sizzleGain) sizzleGain.gain.value = grillFood.length ? 0.015 * grillFood.length : 0;
 
     for (const c of [...customers]) updateCustomer(c, dt);
     updateStaff(dt);
+    passTrays.forEach(syncTray);
     if (delivery && (delivery.t -= dt) <= 0) {
       delivery.list.forEach(placeCrate);
       delivery = null;
@@ -2368,10 +2577,10 @@ frame();
 // debug/test hook
 window.__game = {
   camera, customers, queue, payQueue, grillFood, tables, stock, trays, crates, bins, trayObjs, UPGRADES, ROLES, history, staff, transactions, pos,
-  scene, passItems, holders, sauceLevel, slotLights, PASS_SLOTS, SAUCES, DAYS, ITEMS, sauceAvail,
-  sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate, bottle: handBottle, cup: handCup, stream }, MOOD,
+  scene, passTrays, holders, sauceLevel, slotLights, SLOTS, SAUCES, DAYS, ITEMS, PATIENCE, sauceAvail, slotCount, tipFactor, foodState, grillNeed,
+  sign: signPivot, door: doorPivot, board, monitor, posMon, hands: { L: handL, R: handR, knife, plate: handPlate, bottle: handBottle, cup: handCup, stream, slot: holdSlot }, MOOD,
   get money() { return money; }, set money(v) { money = v; }, get drawer() { return drawer; }, get held() { return held; }, get action() { return currentAction; },
-  get day() { return day; }, get isOpen() { return isOpen; }, get clockMin() { return clockMin; }, set clockMin(v) { clockMin = v; },
+  get day() { return day; }, set day(v) { day = v; }, get isOpen() { return isOpen; }, get clockMin() { return clockMin; }, set clockMin(v) { clockMin = v; },
   get today() { return today; }, get busy() { return busy; }, get uiMode() { return uiMode; }, get delivery() { return delivery; },
   get screenKey() { return screenKey; }, set sinceArrival(v) { sinceArrival = v; }, dayCfg, demandRate, billTotal, tipPct, availability, FOODS,
   setLook(y, p) { yaw = y; pitch = p; camera.rotation.set(p, y, 0); },

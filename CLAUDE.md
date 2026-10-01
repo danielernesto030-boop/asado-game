@@ -32,8 +32,11 @@ Everything lives in `main.js`, in this order (search for the `// ---------- Sect
 6. **HUD, player, hands, loop**, and the `window.__game` test hook at the end.
 
 Conventions:
-- Things the player carries are `held = { kind, type, q, mesh, ... }` with kinds `crate`, `whole`, `portion`,
-  `cooked` (a plated dish, may carry a `sauce`), `bottle`, `sauce` (a filled cup).
+- Things the player carries are `held = { kind, type, q, mesh, ... }` with kinds `crate`, `whole`, `bottle`,
+  `sauce` (a filled cup) and `tray` (a table tray); raw `portion`s (up to `MAX_CARRY` of one kind) and grilled
+  `cooked` pieces (any mix) are stacks `{ kind, items: [{ type, q, mesh }] }`. Held meshes sit in `holdSlot`.
+- The service counter holds one tray per table (`passTrays`); a tray only takes what its table still needs
+  and is READY when every dish and sauce cup is there. Grill pieces carry an `owner` (the grill cook's own).
 - Timed hand actions use `busy = { kind: 'cut' | 'pour', ... }`; `updateBusy` and `updateHands` animate them.
 - No floating labels in the world: use `plaque()` for signs, lamps/mood badges for status. The only sprites
   are guests' speech bubbles and mood badges.
@@ -49,7 +52,8 @@ a global install, found through `NODE_PATH`):
 ```
 npm run dev &                                          # tests use http://localhost:5173 (or GAME_URL)
 NODE_PATH=$(npm root -g) node tests/playtest-pos.cjs     # demand, parties, register, staff, 3 days
-NODE_PATH=$(npm root -g) node tests/playtest-service.cjs # sauces, service counter, server, lamps, signs
+NODE_PATH=$(npm root -g) node tests/playtest-service.cjs # trays, carry, cook, grill, burn, patience, day4
+                                                         # (add section names to run only those)
 ```
 
 Set `SHOTS=/some/dir` to save screenshots. Headless quirks: software WebGL runs at ~5–8 fps and frame

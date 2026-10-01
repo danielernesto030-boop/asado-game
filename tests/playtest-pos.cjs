@@ -167,7 +167,7 @@ const { chromium } = require('playwright');
   await g(() => { __game.money += 500; });
   await act(-6.3, -10.2, -6.3, 1.12, -11.6, '[E] USE TERMINAL');
   await p.click('#os [data-a=tab][data-v=upgrades]');
-  check(await g(() => /COMING SOON/.test(document.getElementById('os').innerText) && !!document.querySelector('#os [data-a=hire][data-v=prep]')), 'STAFF section lists roles (server/grill cook coming soon)');
+  check(await g(() => ['prep', 'server', 'grill'].every(r => document.querySelector(`#os [data-a=hire][data-v=${r}]`))), 'STAFF section offers every role (prep cook, server, grill cook)');
   await p.click('#os [data-a=hire][data-v=prep]');
   check(await g(() => __game.staff.length === 1 && __game.staff[0].role === 'prep' && __game.today.staff === 60), 'prep cook hired ($60)');
   await p.click('#os [data-a=tab][data-v=wholesale]');
