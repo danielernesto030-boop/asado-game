@@ -6,30 +6,58 @@
 <title>Asado Tycoon</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; color: #fff; }
+  [hidden] { display: none !important; }
   .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 3px #000; }
-  #money { top: 14px; left: 18px; font-size: 26px; font-weight: 700; color: #ffd76a; }
-  #orders { top: 14px; right: 18px; font-size: 16px; text-align: right; line-height: 1.5; background: #0007; padding: 8px 12px; border-radius: 6px; min-width: 170px; }
-  #orders b { color: #ffd76a; }
+  #hud { top: 12px; left: 16px; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #hud .money { color: #ffd76a; }
+  #hud .st { font-size: 13px; padding: 2px 7px; border-radius: 4px; margin-left: 10px; vertical-align: 3px; text-shadow: none; }
+  #hud .open { background: #2e7d32; }
+  #hud .closed { background: #b3261e; }
+  #hint { top: 46px; left: 16px; font-size: 15px; color: #f1e9d8; max-width: 70vw; }
   #prompt { bottom: 60px; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: 600; white-space: nowrap; }
-  #msg { bottom: 100px; left: 50%; transform: translateX(-50%); font-size: 22px; font-weight: 700; color: #9f6; }
+  #msg { bottom: 100px; left: 50%; transform: translateX(-50%); font-size: 22px; font-weight: 700; color: #9f6; white-space: nowrap; }
   #cross { top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; }
   #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000b; cursor: pointer; text-align: center; }
   #start h1 { font-size: 56px; margin: 0 0 10px; color: #ffb347; }
   #start p { font-size: 18px; margin: 4px; }
+  /* ASADO OS terminal + end-of-day summary */
+  .ui { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000c; font: 15px ui-monospace, Menlo, Consolas, monospace; }
+  .win { width: min(920px, 94vw); max-height: 88vh; overflow: auto; background: #10231a; color: #cfe8d5; border: 2px solid #3f7a55; box-shadow: 0 0 40px #000a; }
+  .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #3f7a55; color: #06120b; padding: 6px 12px; font-weight: 700; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 12px 0; }
+  .pane { padding: 12px; }
+  .ui button { font: inherit; cursor: pointer; background: #1c3b2a; color: #cfe8d5; border: 1px solid #3f7a55; padding: 5px 12px; }
+  .ui button:hover:not(:disabled) { background: #2b5a40; }
+  .ui button:focus-visible { outline: 2px solid #ffd76a; }
+  .ui button.on { background: #cfe8d5; color: #10231a; }
+  .ui button:disabled { opacity: .4; cursor: default; }
+  .bar button { background: #10231a; }
+  .ui table { width: 100%; border-collapse: collapse; }
+  .ui td, .ui th { padding: 6px 8px; border-bottom: 1px solid #25483a; text-align: left; vertical-align: middle; }
+  .ui th { color: #8fc0a0; font-weight: 400; font-size: 13px; }
+  .num { text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cat { color: #ffd76a; padding-top: 16px !important; letter-spacing: .08em; }
+  .muted { color: #86a893; font-size: 13px; }
+  .foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 12px; }
+  .big { font-size: 20px; }
+  .pos { color: #8fe39f; }
+  .neg { color: #ff8a80; }
 </style>
 </head>
 <body>
-<div id="money" class="hud">Money: $0</div>
-<div id="orders" class="hud"></div>
+<div id="hud" class="hud"></div>
+<div id="hint" class="hud"></div>
 <div id="msg" class="hud"></div>
 <div id="prompt" class="hud"></div>
 <div id="cross" class="hud"></div>
 <div id="start">
   <h1>ASADO TYCOON</h1>
-  <p>WASD move · Mouse look · E interact</p>
-  <p>Take orders at the counter, grill the food, serve the tables before it burns.</p>
+  <p>WASD move · Mouse look · E interact · Esc pause</p>
+  <p>Carry in supplies, cut the meat, grill, serve, then check the books and plan tomorrow.</p>
   <p><b>Click to play</b></p>
 </div>
+<div id="os" class="ui" hidden></div>
+<div id="summary" class="ui" hidden></div>
 <script type="module" src="/main.js"></script>
 </body>
 </html>
