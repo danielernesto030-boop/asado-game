@@ -688,12 +688,14 @@ gltfLoader.register(parser => { // embedded textures decode through <img>: a pag
   parser.textureLoader = new THREE.TextureLoader(parser.options.manager);
   return { name: 'imgTextures' };
 });
+const glbBytes = b => new TextDecoder().decode(new Uint8Array(b, 0, 4)) === 'glTF' ? b // a raw GLB, or base64 text where
+  : Uint8Array.from(atob(new TextDecoder().decode(b)), c => c.charCodeAt(0)).buffer; // the host doesn't serve .glb
 for (const [type, k] of Object.entries(CHARS)) {
-  gltfLoader.load(`models/${k.file}`, gl => {
+  fetch(`models/${k.file}`).then(r => r.arrayBuffer()).then(b => gltfLoader.parse(glbBytes(b), '', gl => {
     let mesh;
     gl.scene.traverse(o => { if (o.isMesh) mesh = o; });
     charLib[type] = prepChar(mesh, k);
-  });
+  }));
 }
 function prepChar(mesh, k) { // arms a little closer to the body, CHAR_H tall with the feet at 0, facing +z, legs split off
   const g = mesh.geometry.clone(), p = g.attributes.position;
