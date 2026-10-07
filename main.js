@@ -47,7 +47,8 @@ const BURN_WARN = 6;                                            // the grill lam
 const MAX_CARRY = 4;                                            // raw portions of one kind carried at once
 const EAT_MIN = 30;                                             // game minutes a party spends eating
 const EYE = 1.6, PLAYER_R = 0.3, SPEED = 4, NPC_SPEED = 1.6;
-const DOOR_IN = new THREE.Vector3(-6, 0, 5.2), OUTSIDE = new THREE.Vector3(-6, 0, 8.5);
+const DOOR_IN = new THREE.Vector3(-6, 0, 5.2), OUTSIDE = new THREE.Vector3(-13.2, 0, 7.3); // guests come and go along the sidewalk
+const DOOR_OUT = new THREE.Vector3(-6, 0, 7.3); // on the sidewalk in front of the door
 const COUNTER_SPOT = new THREE.Vector3(-4, 0, -2.6), REGISTER_SPOT = new THREE.Vector3(-5.6, 0, -2.6);
 const LANE_OFF = 2, AISLE_Z = -1.5;            // walking lanes beside the tables and the aisle in front of them
 const EXIT_WAY = new THREE.Vector3(-3, 0, AISLE_Z); // seated parties leave along the aisle, clear of the tables
@@ -120,6 +121,12 @@ const PROPS = {
   knife:          { file: 'knife.glb', rot: -2.117, scale: 0.26 },          // blade toward -z, lying flat
   board:          { file: 'cutting_board.glb', rot: 0, scale: 0.56 },
   prep_table:     { file: 'prep_table.glb', rot: Math.PI / 2, scale: 1 },   // stretched to the 2 x 0.7 m station
+  street_lamp:    { file: 'street_lamp.glb', rot: 0, scale: 4.2 },
+  plane_tree:     { file: 'plane_tree.glb', rot: 0, scale: 6 },
+  old_car:        { file: 'old_car.glb', rot: Math.PI / 2, scale: 3.6 },  // parked along z
+  colectivo:      { file: 'colectivo.glb', rot: 0, scale: 6.5 },
+  kiosk:          { file: 'kiosk.glb', rot: Math.PI / 2, scale: 2.6 },    // counter toward the street
+  bench:          { file: 'bench.glb', rot: Math.PI / 2, scale: 1.8 },    // seat toward the street
   door:           { file: 'door.glb', rot: -Math.PI / 2, scale: 2.45 },   // street side +z, stretched to the doorway
 };
 const portionsPer = () => (has('prep') ? 8 : 6);
@@ -159,7 +166,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b5d9);
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 100);
 camera.rotation.order = 'YXZ';
-camera.position.set(0, EYE, -1.5);
+camera.position.set(-6, EYE, 14.2); // the player starts across the street, facing the restaurant
 scene.add(camera);
 
 addEventListener('resize', () => {
@@ -317,8 +324,10 @@ function flat(w, d, material, x, z, y = 0) { // floor / ground patch
   scene.add(m);
   return m;
 }
-flat(70, 70, 0x6d7a58, 0, 0, -0.02);             // grass
-flat(16, 6, 0x777777, 0, 9, -0.01);              // street
+flat(90, 90, texMat('sidewalk', 45, 45), 0, 0, -0.02); // paved ground all around (no grass shows anywhere)
+flat(36, 5, texMat('cobblestone', 36 / 2.5, 2), 0, 11, 0.002);           // the street: cobblestone road
+for (const [z, d] of [[7.3, 2.4], [14.75, 2.5]]) flat(36, d, texMat('sidewalk', 30, d / 1.2), 0, z, 0.003); // sidewalks
+flat(2.5, 11.1, texMat('sidewalk', 2, 9), 9.35, 0.55, 0.003);           // side alley to the delivery yard
 flat(16, 12, texMat('calcareas', 16 / 1.2, 12 / 1.2), 0, 0); // dining room: calcáreas tiles
 const kitchenTiles = texMat('floor', 6.7, 2.5);
 kitchenTiles.color.set(0xbfc8c8);
@@ -336,7 +345,6 @@ box(0.2, WH, 12, plaster(0.2, WH, 12), 8, WH / 2, 0);    // dining right
 box(1, WH, 0.2, plaster(1, WH, 0.2), -7.5, WH / 2, 6);   // front, left of door
 box(13, WH, 0.2, plaster(13, WH, 0.2), 1.5, WH / 2, 6);  // front, right of door
 box(2, 1, 0.2, plaster(2, 1, 0.2), -6, WH - 0.5, 6, false); // above door
-colliders.push({ minX: -7, maxX: -5, minZ: 5.9, maxZ: 6.1, on: true }); // the player stays inside; guests use the door
 box(0.2, WH, 6, brickMats(0.2, WH, 6), -8, WH / 2, -9);          // back of house: brick kitchen walls
 box(16.2, WH, 0.2, brickMats(16.2, WH, 0.2), 0, WH / 2, -12);
 box(0.2, WH, 1.6, brickMats(0.2, WH, 1.6), 8, WH / 2, -11.2);      // east wall, back door at z -10.4..-9
@@ -349,7 +357,7 @@ box(0.2, WH, 3.2, plaster(0.2, WH, 3.2), -4.4, WH / 2, -10.4);
 part(new THREE.PlaneGeometry(3.4, WH), texMat('plaster', 3.4 / 2.4, WH / 2.4), -6.2, WH / 2, -11.89).castShadow = false; // over the brick inside the office
 part(new THREE.PlaneGeometry(3, WH), texMat('plaster', 3 / 2.4, WH / 2.4), -7.89, WH / 2, -10.4).rotation.y = Math.PI / 2;
 // delivery yard: low walls, painted loading zone, sign
-for (const [w, d, x, z] of [[6, 0.15, 11, -13], [6, 0.15, 11, -5], [0.15, 8, 14, -9], [0.15, 1, 8, -12.5]]) box(w, 1.1, d, 0x9d9d98, x, 0.55, z);
+for (const [w, d, x, z] of [[6, 0.15, 11, -13], [3.4, 0.15, 12.3, -5], [0.15, 8, 14, -9], [0.15, 1, 8, -12.5]]) box(w, 1.1, d, 0x9d9d98, x, 0.55, z); // open to the side alley
 const stripe = mat(0xf2c230);
 for (const [w, d, x, z] of [[4.6, 0.1, 11, -12.25], [4.6, 0.1, 11, -6.75], [0.1, 5.6, 8.7, -9.5], [0.1, 5.6, 13.3, -9.5]]) flat(w, d, stripe, x, z, 0.004);
 for (let i = 0; i < 5; i++) flat(0.12, 0.9, stripe, 9.4 + i * 0.85, -7.15, 0.004).rotation.z = 0.7;
@@ -985,7 +993,7 @@ function spawnParty() { // a party walks in together; the leader orders and pays
   const table = pick(free), size = pick(dayCfg().party), made = [];
   const person = i => {
     const rig = makeCustomerRig(made);
-    rig.root.position.set(OUTSIDE.x + MEMBER_OFFSETS[i][0], 0, OUTSIDE.z + i * 0.7);
+    rig.root.position.set(OUTSIDE.x - i * 0.9, 0, OUTSIDE.z); // in a line along the sidewalk
     scene.add(rig.root);
     return rig;
   };
@@ -994,13 +1002,13 @@ function spawnParty() { // a party walks in together; the leader orders and pays
   mood.visible = false;
   g.add(mood);
   const c = {
-    group: g, mood, table, rig, state: 'enter', path: [DOOR_IN.clone()], members: [], items: null, foods: [],
+    group: g, mood, table, rig, state: 'enter', path: [DOOR_OUT.clone(), DOOR_IN.clone()], members: [], items: null, foods: [],
     patience: pat, maxPatience: pat, orderedAt: 0, bubble: null, eatT: 0, tipP: 1, pay: null, missedSauce: false,
   };
   for (let i = 1; i < size; i++) {
     const r = person(i);
     r.root.userData = { kind: 'customer', ref: c };
-    c.members.push({ rig: r, group: r.root, seatI: i, state: 'enter', path: [DOOR_IN.clone().add(new THREE.Vector3(MEMBER_OFFSETS[i][0], 0, 0.6 * i))] });
+    c.members.push({ rig: r, group: r.root, seatI: i, state: 'enter', path: [DOOR_OUT.clone().add(new THREE.Vector3(MEMBER_OFFSETS[i][0] * 0.6, 0, 0)), DOOR_IN.clone().add(new THREE.Vector3(MEMBER_OFFSETS[i][0], 0, 0.6 * i))] });
   }
   g.userData = { kind: 'customer', ref: c };
   table.customer = c;
@@ -1021,7 +1029,7 @@ function setBubble(c, text) {
 
 function sit(group, seat) { group.position.set(seat.pos.x, -0.2, seat.pos.z); group.rotation.y = seat.rot; }
 const seatPath = st => [new THREE.Vector3(st.lane.x, 0, AISLE_Z), st.lane.clone(), st.pos.clone()];
-const exitPath = lane => [lane.clone(), new THREE.Vector3(lane.x, 0, AISLE_Z), EXIT_WAY.clone(), DOOR_IN.clone(), OUTSIDE.clone()];
+const exitPath = lane => [lane.clone(), new THREE.Vector3(lane.x, 0, AISLE_Z), EXIT_WAY.clone(), DOOR_IN.clone(), DOOR_OUT.clone(), OUTSIDE.clone()];
 
 function takeOrder(c) {
   queue.shift();
@@ -1205,7 +1213,7 @@ function memberExit(m, c) {
   const seated = m.state === 'wait' || m.state === 'eat';
   m.state = 'exit';
   m.group.position.y = 0;
-  m.path = seated ? exitPath(c.table.seats[m.seatI].lane) : [DOOR_IN.clone(), OUTSIDE.clone()];
+  m.path = seated ? exitPath(c.table.seats[m.seatI].lane) : [DOOR_IN.clone(), DOOR_OUT.clone(), OUTSIDE.clone()];
 }
 function leave(c, angry) {
   const seated = c.state === 'wait' || c.state === 'eat';
@@ -1213,7 +1221,7 @@ function leave(c, angry) {
   c.group.position.y = 0;
   if (c.table.customer === c) c.table.customer = null;
   for (const q of [queue, payQueue]) { const i = q.indexOf(c); if (i >= 0) q.splice(i, 1); }
-  c.path = seated ? exitPath(c.table.seats[0].lane) : [DOOR_IN.clone(), OUTSIDE.clone()];
+  c.path = seated ? exitPath(c.table.seats[0].lane) : [DOOR_IN.clone(), DOOR_OUT.clone(), OUTSIDE.clone()];
   c.foods.forEach(m => scene.remove(m));
   c.foods = [];
   c.members.forEach(m => { if (m.state !== 'exit') memberExit(m, c); });
@@ -1893,6 +1901,72 @@ onProp('plant', L => {
 });
 onProp('winerack', L => { const m = makeProp(L); m.position.set(7.785, 1.15, 2.9); scene.add(m); });
 onProp('plates', L => { const m = makeProp(L); m.position.set(-3, 1.7, -5.729); scene.add(m); });
+
+// ---- the street outside: neighbours, the restaurant front, lamps, trees, a parked car, the colectivo, a kiosk, benches
+// Every boundary is something you can see: houses, a construction fence and a parked car with bollards at the street ends.
+function house(x0, x1, z0, z1, h, facade, tint, front) { // a textured box, not enterable; `front` = the street side (+1/-1 along z)
+  const fm = texMat(facade, Math.max(1, Math.round((x1 - x0) / 3.6)), Math.max(1, Math.round(h / 4))), side = texMat('plaster', (z1 - z0) / 2.4, h / 2.4);
+  fm.color.setHex(tint);
+  side.color.setHex(tint);
+  const roof = mat(0x6e5a4a);
+  box(x1 - x0, h, z1 - z0, [side, side, roof, roof, front > 0 ? fm : side, front < 0 ? fm : side], (x0 + x1) / 2, h / 2, (z0 + z1) / 2);
+}
+[[-18, -11, 7.5, 'facade_orange', 0xffffff], [-11, -4, 9, 'facade_blue', 0xf4f8ff], [-4, 3, 8, 'facade_orange', 0xffe8d8],
+  [3, 10, 8.5, 'facade_blue', 0xe8f4ff], [10, 18, 7.5, 'facade_orange', 0xfff2e2]].forEach(([x0, x1, h, f, t]) => house(x0, x1, 16, 24, h, f, t, -1)); // across the street
+house(-18, -8.1, -12, 6.1, 8, 'facade_blue', 0xf0f6ff, 1);     // next door, west
+house(10.6, 18, -4.9, 6.1, 8, 'facade_orange', 0xfff0e4, 1);   // next door, east (the side alley runs between)
+// the restaurant front: the filete logo over the door, striped awnings over the windows
+picture('logo', 1.5, 0.84, -6, 3.0, 6.115, 0);
+const awningTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 16;
+  const g = c.getContext('2d');
+  for (let i = 0; i < 8; i++) { g.fillStyle = i % 2 ? '#f4efe6' : '#b8342c'; g.fillRect(i * 32, 0, 32, 16); }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const awningMat = new THREE.MeshStandardMaterial({ map: awningTex, roughness: 0.9, side: THREE.DoubleSide });
+for (const x of [-4.1, 0.2, 4.4]) {
+  const a = part(new THREE.PlaneGeometry(2.2, 1.05), awningMat, x, 2.78, 6.55);
+  a.rotation.x = -Math.PI / 2 + 0.45; // slopes down from the wall
+  part(new THREE.PlaneGeometry(2.2, 0.22), awningMat, x, 2.47, 7.01).castShadow = false; // the hanging valance
+}
+// street ends: a construction fence (west), a parked car and chained bollards (east)
+const fenceTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 32;
+  const g = c.getContext('2d');
+  for (let i = -2; i < 10; i++) { g.fillStyle = i % 2 ? '#f4f1ea' : '#e0601f'; g.beginPath(); g.moveTo(i * 16, 32); g.lineTo(i * 16 + 16, 32); g.lineTo(i * 16 + 32, 0); g.lineTo(i * 16 + 16, 0); g.fill(); }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.RepeatWrapping;
+  t.repeat.x = 8;
+  return t;
+})();
+box(0.12, 1.15, 9.9, new THREE.MeshStandardMaterial({ map: fenceTex, roughness: 0.8 }), -16.5, 0.575, 11.05);
+for (let z = 6.3; z < 16; z += 1.6) part(new THREE.BoxGeometry(0.1, 1.3, 0.1), iron, -16.5, 0.65, z);
+colliders.push({ minX: 14.6, maxX: 16.6, minZ: 9.2, maxZ: 12.8, on: true }); // the parked car (the model arrives below)
+for (const [z0, z1] of [[6.1, 9.2], [12.8, 16]]) {
+  for (let z = z0 + 0.2; z < z1; z += 0.75) part(new THREE.CylinderGeometry(0.08, 0.1, 0.8, 8), iron, 16.5, 0.4, z);
+  part(new THREE.BoxGeometry(0.03, 0.03, z1 - z0 - 0.3), iron, 16.5, 0.62, (z0 + z1) / 2); // the chain
+  colliders.push({ minX: 16.4, maxX: 16.6, minZ: z0, maxZ: z1, on: true });
+}
+// lamps (two lit), plane trees, the colectivo at its stop, the kiosk on the corner, benches; their colliders come with them
+const STREET = { street_lamp: [[-11, 8.15], [2, 8.15], [-3, 13.85], [11, 13.85]], plane_tree: [[-12.5, 14.8], [7.5, 14.9], [13.5, 7.4]],
+  bench: [[0.5, 15.4], [-8, 15.4]], kiosk: [[-14.9, 14.85]], colectivo: [[5, 11.95]], old_car: [[15.6, 11]] };
+const STREET_COL = { street_lamp: [0.3, 0.3], plane_tree: [0.6, 0.6], bench: [1.8, 0.6], kiosk: [2.3, 2.3], colectivo: [6.5, 3.1] };
+for (const [name, spots] of Object.entries(STREET)) {
+  for (const [x, z] of spots) if (STREET_COL[name]) { const [w, d] = STREET_COL[name]; colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, on: true }); }
+  onProp(name, L => spots.forEach(([x, z]) => { const m = makeProp(L); m.position.set(x, 0, z); scene.add(m); }));
+}
+for (const [x, z] of STREET.street_lamp.slice(0, 2)) { const l = new THREE.PointLight(0xffc27a, 2.5, 10); l.position.set(x, 3.85, z); scene.add(l); }
+part(rod(0.04, 2.6), iron, 2.6, 1.3, 14.1);
+plaque('PARADA', 0.7, 0.3, 2.6, 2.45, 14.1, 0, '#2a1a10', '#f4e4c8', true); // the bus stop
+// the Buenos Aires skyline on a curved backdrop all around, behind the houses
+const pano = part(new THREE.CylinderGeometry(60, 60, 44, 48, 1, true), new THREE.MeshBasicMaterial({ map: tex('panorama', 3, 1), side: THREE.BackSide, depthWrite: false }), 0, 18, 2);
+pano.castShadow = false;
+pano.renderOrder = -1;
 
 // delivery crates (free starter crates wait in the yard on day 1)
 function makeCrate(item, qs, starter) {
@@ -3126,7 +3200,8 @@ function frame() {
   updatePOS(dt, playing);
   // the sign turns 180° and the door swings open/closed (it stays open until the last guest is out)
   signPivot.rotation.y += ((isOpen ? Math.PI : 0) - signPivot.rotation.y) * Math.min(1, dt * 3);
-  doorPivot.rotation.y += ((isOpen || customers.length ? -Math.PI / 2 : 0) - doorPivot.rotation.y) * Math.min(1, dt * 2.5);
+  const atDoor = Math.hypot(camera.position.x + 6, camera.position.z - 6) < 2.6;
+  doorPivot.rotation.y += ((isOpen || customers.length || atDoor ? -Math.PI / 2 : 0) - doorPivot.rotation.y) * Math.min(1, dt * 2.5);
   const moving = camera.position.distanceToSquared(lastPos) > 1e-6;
   lastPos.copy(camera.position);
   updateHands(dt, moving);
