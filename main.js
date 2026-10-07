@@ -1412,14 +1412,25 @@ for (const [t, bg, z, ry] of [['CLOSED', '#b3261e', -0.021, Math.PI], ['OPEN', '
 signPivot.userData.kind = 'sign';
 scene.add(signPivot);
 
-// cold storage: open refrigerated shelving, one compartment per wholesale item
+// cold storage: stainless refrigerated shelving, one compartment per wholesale item, in front of white cold-room
+// wall panels under a slightly cool light
 colliders.push({ minX: 0.45, maxX: 5.55, minZ: -11.95, maxZ: -11.15, on: true });
-part(new THREE.BoxGeometry(5.1, 2.1, 0.06), new THREE.MeshStandardMaterial({ color: 0xe6f6ff, emissive: 0x9fd8ff, emissiveIntensity: 0.35 }), 3, 1.05, -11.92);
-part(new THREE.BoxGeometry(5.1, 0.3, 0.8), steel, 3, 1.95, -11.55);
-part(new THREE.BoxGeometry(5.1, 0.25, 0.8), steel, 3, 0.125, -11.55);
+const stainless = new THREE.MeshStandardMaterial({ map: tex('steel', 2, 1), metalness: 0.45, roughness: 0.45 });
+const coldPanels = texMat('coldroom', 4, 2.5);
+coldPanels.emissive.setHex(0x1c2a36); // a faint cool glow
+part(new THREE.BoxGeometry(5.1, 2.1, 0.06), coldPanels, 3, 1.05, -11.92);
+part(new THREE.PlaneGeometry(5.6, WH), coldPanels, 3, WH / 2, -11.887).castShadow = false; // the whole wall behind it
+part(new THREE.BoxGeometry(5.1, 0.3, 0.8), stainless, 3, 1.95, -11.55);
+part(new THREE.BoxGeometry(5.1, 0.25, 0.8), stainless, 3, 0.125, -11.55);
 const BIN_W = 5.1 / ITEM_KEYS.length;
-for (let i = 0; i <= ITEM_KEYS.length; i++) part(new THREE.BoxGeometry(0.05, 2.1, 0.8), steel, 0.45 + i * BIN_W, 1.05, -11.55);
-for (const y of [0.5, 1.15]) part(new THREE.BoxGeometry(5.1, 0.03, 0.7), steel, 3, y, -11.6);
+for (let i = 0; i <= ITEM_KEYS.length; i++) part(new THREE.BoxGeometry(0.05, 2.1, 0.8), stainless, 0.45 + i * BIN_W, 1.05, -11.55);
+for (const y of [0.5, 1.15]) part(new THREE.BoxGeometry(5.1, 0.03, 0.7), stainless, 3, y, -11.6);
+const coldLight = new THREE.PointLight(0xdcecff, 3, 5);
+coldLight.position.set(3, 2.7, -10.6);
+scene.add(coldLight);
+// PVC strip curtain in the back doorway: the kitchen is closed off from the yard, and anyone still walks through
+const stripMat = new THREE.MeshStandardMaterial({ color: 0xcfe4ec, transparent: true, opacity: 0.5, roughness: 0.2, side: THREE.DoubleSide, depthWrite: false });
+for (let i = 0; i < 7; i++) part(new THREE.PlaneGeometry(0.22, 2.36), stripMat, 7.9, 1.21, -10.32 + i * 0.207).rotation.y = Math.PI / 2;
 const capPlaque = plaque('', 2.2, 0.36, 3, 2.45, -11.885, 0, '#0b3d5c', '#e6f6ff');
 const bins = ITEM_KEYS.map((id, i) => {
   const x = 0.45 + BIN_W * (i + 0.5);
@@ -1429,8 +1440,8 @@ const bins = ITEM_KEYS.map((id, i) => {
   label.position.set(x, 1.95, -11.14);
   const shows = [0, 1, 2, 3].map(k => {
     const m = makeItemMesh(id);
-    m.position.set(x + (k % 2 ? 0.15 : -0.15), k < 2 ? 0.59 : 1.24, -11.55);
-    m.scale.multiplyScalar(ITEMS[id].whole ? 0.6 : ITEMS[id].sauce ? 1 : 0.8);
+    m.position.set(x + (k % 2 ? 0.15 : -0.15), k < 2 ? 0.59 : 1.24, -11.48); // up front where they are easy to see
+    m.scale.multiplyScalar(ITEMS[id].whole ? 0.7 : ITEMS[id].sauce ? 1 : 0.9);
     scene.add(m);
     return m;
   });
@@ -1481,15 +1492,16 @@ const trayObjs = ['filet', 'vacio'].map((d, i) => {
   return { d, t, label, shows };
 });
 
-// dry storage shelving (a second unit arrives with "More Storage Capacity")
+// dry storage: wooden shelving with meat crates and cardboard boxes (a second unit arrives with "More Storage Capacity")
+const crateMat = texMat('crate'), cardboardMat = texMat('cardboard');
 function shelf(x, z, w) {
   const g = new THREE.Group();
-  for (const dx of [-w / 2, w / 2]) part(new THREE.BoxGeometry(0.05, 2, 0.5), steel, x + dx, 1, z, g);
+  for (const dx of [-w / 2, w / 2]) part(new THREE.BoxGeometry(0.05, 2, 0.5), brickMats(0.05, 2, 0.5, 1, 'counter_wood'), x + dx, 1, z, g);
   for (const y of [0.3, 0.95, 1.6]) {
-    part(new THREE.BoxGeometry(w, 0.04, 0.5), steel, x, y, z, g);
+    part(new THREE.BoxGeometry(w, 0.04, 0.5), brickMats(w, 0.04, 0.5, 1, 'counter_wood'), x, y, z, g);
     for (let i = 0; i < 3; i++) {
-      const sz = 0.26 + ((i + y * 10) % 3) * 0.05;
-      part(new THREE.BoxGeometry(sz, sz * 0.8, 0.36), mat([0xb08850, 0xa07845, 0xc4a070][i]), x - w / 2 + 0.35 + i * (w - 0.7) / 2, y + 0.02 + sz * 0.4, z, g);
+      const sz = 0.26 + ((i + y * 10) % 3) * 0.05, k = Math.round(i + y * 10);
+      part(new THREE.BoxGeometry(sz, sz * 0.8, 0.36), k % 2 ? crateMat : cardboardMat, x - w / 2 + 0.35 + i * (w - 0.7) / 2, y + 0.02 + sz * 0.4, z, g).rotation.y = (k % 5 - 2) * 0.07;
     }
   }
   scene.add(g);
