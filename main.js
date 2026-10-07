@@ -175,8 +175,8 @@ sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
 sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
 sun.shadow.mapSize.set(1024, 1024);
 scene.add(sun);
-const grillLight = new THREE.PointLight(0xff7a2a, 3, 6);
-grillLight.position.set(4.5, 1.6, -4.8);
+const grillLight = new THREE.PointLight(0xff7a2a, 3, 2.6); // short range: it glows on the grill, not through the wall onto the prep table
+grillLight.position.set(4.5, 1.5, -4.4);
 scene.add(grillLight);
 const kitchenLight = new THREE.PointLight(0xfff0dc, 8, 14);
 kitchenLight.position.set(0.8, 3.3, -10.3); // over the middle of the back of house, not glaring on the prep table
@@ -1458,6 +1458,8 @@ colliders.push(freezerCol);
 const prepTable = box(2, 0.9, 0.7, steel, 4.2, 0.45, -6.55);
 onProp('prep_table', L => { // the stainless prep table: work surface at 0.9 under the board and trays, back edge against the wall
   prepTable.material = hitMat; // still the collider and the prep hit area
+  L.mat.metalness = 0.35; // fully metallic it renders black without an environment map
+  L.mat.roughness = 0.55;
   const m = makeProp(L);
   m.scale.set(2, 1.557, 1.205);
   m.position.set(4.2, 0, -6.55);
