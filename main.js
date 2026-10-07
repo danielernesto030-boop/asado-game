@@ -343,7 +343,14 @@ const plaster = (w, h, d) => brickMats(w, h, d, 2.4, 'plaster');
 box(0.2, WH, 12, plaster(0.2, WH, 12), -8, WH / 2, 0);   // dining left
 box(0.2, WH, 12, plaster(0.2, WH, 12), 8, WH / 2, 0);    // dining right
 box(1, WH, 0.2, plaster(1, WH, 0.2), -7.5, WH / 2, 6);   // front, left of door
-box(13, WH, 0.2, plaster(13, WH, 0.2), 1.5, WH / 2, 6);  // front, right of door
+let fx = -5; // front, right of door: plaster around the three window openings (the street shows through the glass)
+for (const wx of [-4.1, 0.2, 4.4]) {
+  box(wx - 0.65 - fx, WH, 0.2, plaster(wx - 0.65 - fx, WH, 0.2), (fx + wx - 0.65) / 2, WH / 2, 6);
+  box(1.3, 1.2, 0.2, plaster(1.3, 1.2, 0.2), wx, 0.6, 6);
+  box(1.3, WH - 2.3, 0.2, plaster(1.3, WH - 2.3, 0.2), wx, (WH + 2.3) / 2, 6, false);
+  fx = wx + 0.65;
+}
+box(8 - fx, WH, 0.2, plaster(8 - fx, WH, 0.2), (fx + 8) / 2, WH / 2, 6);
 box(2, 1, 0.2, plaster(2, 1, 0.2), -6, WH - 0.5, 6, false); // above door
 box(0.2, WH, 6, brickMats(0.2, WH, 6), -8, WH / 2, -9);          // back of house: brick kitchen walls
 box(16.2, WH, 0.2, brickMats(16.2, WH, 0.2), 0, WH / 2, -12);
@@ -1836,12 +1843,14 @@ for (const t of tables) {
   scene.add(g);
 }
 // windows (bright glass in wooden frames) and wainscoting around the dining room
-const glass = new THREE.MeshStandardMaterial({ color: 0xcfe6f2, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.1, depthWrite: false }); // see-through, catches highlights
+const glass = new THREE.MeshStandardMaterial({ color: 0xcfe6f2, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide }); // see-through, catches highlights
 function windowAt(x, z, ry) {
   const g = new THREE.Group();
   g.position.set(x, 1.75, z);
   g.rotation.y = ry;
-  part(new THREE.PlaneGeometry(1.3, 1.1), glass, 0, 0, 0, g).castShadow = false;
+  const pane = part(new THREE.PlaneGeometry(1.3, 1.1), glass, 0, 0, 0, g);
+  pane.castShadow = false;
+  solids.push(pane); // nothing is reached through the glass (the OPEN/CLOSED sign hangs behind the front one)
   for (const [w, h, px, py] of [[1.42, 0.07, 0, 0.585], [1.42, 0.07, 0, -0.585], [0.07, 1.24, 0.685, 0], [0.07, 1.24, -0.685, 0], [0.04, 1.1, 0, 0], [1.3, 0.04, 0, 0]]) {
     part(new THREE.BoxGeometry(w, h, 0.05), wood, px, py, 0.02, g);
   }
