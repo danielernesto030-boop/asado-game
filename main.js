@@ -596,8 +596,8 @@ function foodMat(type) {
   m.color.setRGB(...FOODS[type].raw);
   return m;
 }
-// Higgsfield raw food: the models show raw meat; cookLook() turns a piece golden brown with grill marks, then burnt
-const GOLDEN = new THREE.Color(0.86, 0.56, 0.32), CHARRED = new THREE.Color(0.13, 0.09, 0.07);
+// Higgsfield raw food: the models show raw meat; cookLook() browns a piece and fades in grill marks, then burns it
+const CHARRED = new THREE.Color(0.13, 0.09, 0.07);
 const grillMarks = loader.load('textures/grill_marks.webp'), burntTex = tex('burnt');
 grillMarks.colorSpace = THREE.SRGBColorSpace;
 grillMarks.wrapS = grillMarks.wrapT = THREE.RepeatWrapping;
@@ -611,6 +611,8 @@ function foodMatGLB(base, type) { // per piece: grill marks (top faces, projecte
     sh.vertexShader = 'varying vec3 vFoodPos;\nvarying vec3 vFoodN;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vFoodPos = position;\n  vFoodN = normal;');
     sh.fragmentShader = 'uniform float uCook;\nuniform float uBurn;\nuniform float uMarkOn;\nuniform sampler2D uMarks;\nuniform sampler2D uBurnt;\nvarying vec3 vFoodPos;\nvarying vec3 vFoodN;\n'
       + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+  float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); // cooking browns the raw colour but keeps its detail
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.5, 0.29, 0.14) * (0.55 + 0.9 * lum), uCook * (0.45 + 0.4 * uMarkOn));
   vec4 mk = texture2D(uMarks, vFoodPos.xz * 6.0);
   diffuseColor.rgb = mix(diffuseColor.rgb, mk.rgb, mk.a * uCook * uMarkOn * smoothstep(0.35, 0.8, normalize(vFoodN).y));
   diffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uBurnt, vFoodPos.xz * 4.0).rgb, uBurn);`);
@@ -623,7 +625,7 @@ function cookLook(mesh, cook, burn) { // cook 0 raw → 1 done; burn 0 → 1 bur
   if (!u.cook) return false;
   u.cook.value = cook;
   u.burn.value = burn;
-  mesh.material.color.setRGB(1, 1, 1).lerp(GOLDEN, cook).lerp(CHARRED, burn);
+  mesh.material.color.setRGB(1, 1, 1).lerp(CHARRED, burn);
   return true;
 }
 function makeFoodMesh(type) {
