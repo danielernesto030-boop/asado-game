@@ -2691,7 +2691,7 @@ function hintText() { // one line telling the player what to do next
 const icon = name => `<img class="ico" src="ui/${name}.webp" alt="">`;
 const iconImgs = {};
 function iconImg(name) { // for canvases (the register); redraws the register once it has loaded
-  if (!iconImgs[name]) { const im = iconImgs[name] = new Image(); im.onload = () => { pos.dirty = true; }; im.src = `ui/${name}.webp`; }
+  if (!iconImgs[name]) { const im = iconImgs[name] = new Image(); im.onload = () => { pos.dirty = true; screenKey = ''; }; im.src = `ui/${name}.webp`; }
   return iconImgs[name];
 }
 const eventEl = document.getElementById('event'), cardEl = document.getElementById('card');
@@ -2762,13 +2762,21 @@ function highlight(o) {
   });
 }
 let screenKey = '', screenT = 0;
+// order boards (counter, kitchen, grill wall): the Higgsfield chalkboard with chalk lettering, food icons per item and a
+// status dot: waiting, on the grill, ready (on its tray, or only the sauce missing), served
+const chalkImg = new Image();
+chalkImg.crossOrigin = 'anonymous';
+chalkImg.onload = () => { screenKey = ''; };
+chalkImg.src = 'ui/chalkboard.jpg';
+document.fonts.load('22px "Lilita One"').then(() => { screenKey = ''; }, () => {});
+const DOT = { waiting: '#ff6b5b', grill: '#ffb020', ready: '#5fe07a', served: '#7ec8ff' };
 function drawScreens(dt) { // counter POS + kitchen display: active orders per table
   if ((screenT -= dt) > 0) return;
   screenT = 0.3;
   const rows = [];
   for (const c of customers.filter(c => c.items && ['toTable', 'wait', 'eat'].includes(c.state)).sort((a, b) => a.table.n - b.table.n)) {
-    rows.push([`TABLE ${c.table.n} (${1 + c.members.length})`, c.state === 'eat' ? 'EATING' : c.state === 'toTable' ? 'SEATING' : passTrays[c.table.n - 1].ready ? 'TRAY READY' : 'WAITING', 1]);
-    const n = {};
+    rows.push({ head: `TABLE ${c.table.n} (${1 + c.members.length})`, note: c.state === 'eat' ? 'EATING' : c.state === 'toTable' ? 'SEATING' : passTrays[c.table.n - 1].ready ? 'TRAY READY' : 'WAITING' });
+    const n = {}, tray = passTrays[c.table.n - 1];
     for (const i of c.items) {
       const e = (n[i.dish + (i.sauce ? '+' + i.sauce : '')] ||= [0, 0, 0]);
       e[0]++;
@@ -2776,39 +2784,42 @@ function drawScreens(dt) { // counter POS + kitchen display: active orders per t
       if (i.served && (!i.sauce || i.sauced)) e[2]++;
     }
     for (const [key, [k, sv, done]] of Object.entries(n)) {
-      const [d, sc] = key.split('+');
-      rows.push([`  ${FOODS[d].name}${sc ? ' + ' + SAUCES[sc].short : ''} ×${k}`, done === k ? 'SERVED' : sv === k ? 'ADD SAUCE' : sv ? `${sv}/${k} served` : 'TO COOK', 0]);
+      const [d, sc] = key.split('+'), onTray = tray.items.filter(x => x.kind === 'dish' && x.type === d).length;
+      const st = done === k ? 'served' : sv === k || sv + onTray >= k ? 'ready' : grillFood.some(f => f.type === d && foodState(f) !== 'burnt') ? 'grill' : 'waiting';
+      rows.push({ d, sc, k, st });
     }
   }
   const waiting = queue.filter(c => c.state === 'order').length, paying = payQueue.length;
-  const key = JSON.stringify(rows) + waiting + paying + isOpen + Math.floor(clockMin);
+  const key = JSON.stringify(rows) + waiting + paying + isOpen + Math.floor(clockMin) + chalkImg.complete;
   if (key === screenKey) return;
   screenKey = key;
-  const g = orderCanvas.getContext('2d'), W = 512, H = 360;
-  g.fillStyle = '#0b1a12';
-  g.fillRect(0, 0, W, H);
-  g.fillStyle = '#3f7a55';
-  g.fillRect(0, 0, W, 44);
-  g.textBaseline = 'middle';
-  g.font = 'bold 24px monospace';
-  g.fillStyle = '#06120b';
-  g.textAlign = 'left';
-  g.fillText('ACTIVE ORDERS', 14, 23);
-  g.textAlign = 'right';
-  g.fillText(isOpen ? fmtTime(clockMin) : 'CLOSED', W - 14, 23);
-  let y = 68;
-  if (!rows.length) {
-    g.textAlign = 'left'; g.font = '22px monospace'; g.fillStyle = '#7fa38c';
-    g.fillText(isOpen ? 'No open orders' : 'Restaurant closed', 14, y);
-  }
-  for (const [a, b, head] of rows.slice(0, 10)) {
-    g.font = head ? 'bold 22px monospace' : '21px monospace';
-    g.textAlign = 'left'; g.fillStyle = head ? '#ffd76a' : '#cfe8d5'; g.fillText(a, 14, y);
-    g.textAlign = 'right'; g.fillStyle = b === 'SERVED' ? '#6fdc8c' : head ? '#8fc0a0' : '#ffb347'; g.fillText(b, W - 14, y);
-    y += 26;
+  const g = orderCanvas.getContext('2d'), W = 512, H = 360, L = 44, R = 468;
+  if (chalkImg.complete && chalkImg.naturalWidth) g.drawImage(chalkImg, 0, 0, W, H);
+  else { g.fillStyle = '#1f2321'; g.fillRect(0, 0, W, H); }
+  const chalk = (t, x, y, size, color = '#f4f1ea', align = 'left') => {
+    g.font = `${size}px "Lilita One", "Arial Rounded MT Bold", sans-serif`; g.textAlign = align; g.textBaseline = 'middle';
+    g.shadowColor = 'rgba(255,255,255,0.35)'; g.shadowBlur = 2; g.fillStyle = color; g.fillText(t, x, y); g.shadowBlur = 0;
+  };
+  chalk('ACTIVE ORDERS', L, 54, 26);
+  chalk(isOpen ? fmtTime(clockMin) : 'CLOSED', R, 54, 22, '#ffd76a', 'right');
+  g.fillStyle = 'rgba(244,241,234,0.5)'; g.fillRect(L, 70, R - L, 2);
+  let y = 92;
+  if (!rows.length) chalk(isOpen ? 'No open orders' : 'Restaurant closed', L, y + 4, 22, 'rgba(244,241,234,0.75)');
+  for (const r of rows.slice(0, 8)) {
+    if (r.head) {
+      chalk(r.head, L, y, 21, '#ffd76a');
+      chalk(r.note, R, y, 17, '#cfe8d5', 'right');
+    } else {
+      const ic = iconImg(r.d), sc = r.sc && iconImg(r.sc);
+      if (ic.complete && ic.naturalWidth) g.drawImage(ic, L + 8, y - 13, 26, 26);
+      if (sc && sc.complete && sc.naturalWidth) g.drawImage(sc, L + 34, y - 11, 22, 22);
+      chalk(`×${r.k}  ${FOODS[r.d].name}${r.sc ? ' + ' + SAUCES[r.sc].short : ''}`, L + (r.sc ? 62 : 40), y, 19);
+      g.fillStyle = DOT[r.st]; g.beginPath(); g.arc(R - 8, y, 7, 0, Math.PI * 2); g.fill();
+    }
+    y += 27;
   }
   const foot = [waiting && `COUNTER: ${waiting} to order`, paying && `REGISTER: ${paying} to pay`].filter(Boolean).join(' · ');
-  if (foot) { g.textAlign = 'left'; g.font = 'bold 20px monospace'; g.fillStyle = '#ffb347'; g.fillText(foot, 14, H - 20); }
+  if (foot) chalk(foot, L, H - 50, 18, '#ffb347');
   orderTex.needsUpdate = true;
 }
 
