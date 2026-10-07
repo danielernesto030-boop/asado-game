@@ -1298,15 +1298,63 @@ function updateCustomer(c, dt) {
 }
 
 // ---------- Back of house, entrance, delivery ----------
-function panel(text, w, h, bg = '#000a', fg = '#fff') { // flat canvas sign facing +z
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: labelTex(text, bg, fg, w / h), transparent: true }));
-  m.userData.aspect = w / h;
+// Wooden signs: the HUD's sign panel drawn as a 9-slice on a canvas, Lilita One lettering (cream, dark outline) and an
+// optional icon. Every sign is redrawn once the panel art, the font and its icon are in; setSign() re-letters one in place.
+const CREAM = '#fff6e0';
+const SIGN_ICON = { KITCHEN: 'chef', STORAGE: 'sack', OFFICE: 'calendar', 'PREP STATION': 'plate', PEDIDOS: 'bell', CAJA: 'coin', DELIVERY: 'sack', PARRILLA: 'flame', SERVICE: 'bell', SAUCES: 'chimi' };
+const signArt = new Image(), signIcons = {}, woodSigns = [];
+function signIcon(name) {
+  if (!signIcons[name]) {
+    const im = signIcons[name] = new Image();
+    im.onload = () => woodSigns.filter(w => w.icon === name).forEach(drawWood);
+    im.src = `ui/${name}.webp`;
+  }
+  return signIcons[name];
+}
+function drawWood(w) {
+  const c = w.tex.image, g = c.getContext('2d'), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  if (signArt.naturalWidth) { // 9-slice: the corners keep their shape, edges and centre stretch
+    const sw = signArt.naturalWidth, sh = signArt.naturalHeight, sl = sw * 0.094, st = sh * 0.18, dt = H * 0.2, dl = dt * 1.15;
+    const sx = [0, sl, sw - sl, sw], sy = [0, st, sh - st, sh], dx = [0, dl, W - dl, W], dy = [0, dt, H - dt, H];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) g.drawImage(signArt, sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j], dx[i], dy[j], dx[i + 1] - dx[i], dy[j + 1] - dy[j]);
+  } else { g.fillStyle = '#6b4528'; g.fillRect(0, 0, W, H); }
+  const im = w.icon && signIcon(w.icon), isz = H * 0.62, gap = im ? isz + H * 0.08 : 0;
+  let size = H * 0.5;
+  g.font = `${size}px "Lilita One", "Arial Rounded MT Bold", sans-serif`;
+  const tw = g.measureText(w.text).width, room = W - H * 0.5 - gap;
+  if (tw > room) { size = Math.floor(size * room / tw); g.font = `${size}px "Lilita One", "Arial Rounded MT Bold", sans-serif`; }
+  const total = gap + Math.min(tw, room), x0 = (W - total) / 2;
+  if (im && im.complete && im.naturalWidth) g.drawImage(im, x0, (H - isz) / 2, isz, isz);
+  g.textAlign = 'left'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  g.lineWidth = size * 0.16; g.strokeStyle = '#2a1408'; g.strokeText(w.text, x0 + gap, H * 0.53);
+  g.fillStyle = w.color; g.fillText(w.text, x0 + gap, H * 0.53);
+  w.tex.needsUpdate = true;
+}
+function woodTex(text, aspect, icon = null, color = CREAM) {
+  const c = document.createElement('canvas');
+  c.height = 128;
+  c.width = Math.round(128 * aspect);
+  const tex = new THREE.CanvasTexture(c), w = { tex, text, icon, color };
+  tex.colorSpace = THREE.SRGBColorSpace;
+  woodSigns.push(w);
+  drawWood(w);
+  return w;
+}
+function setSign(face, text, icon = face.userData.sign.icon, color = CREAM) { // re-letter a wooden sign
+  const w = face.userData.sign;
+  if (w.text === text && w.icon === icon && w.color === color) return;
+  Object.assign(w, { text, icon, color });
+  drawWood(w);
+}
+Promise.all([new Promise(r => { signArt.onload = signArt.onerror = r; }), document.fonts.load('64px "Lilita One"').catch(() => {})]).then(() => woodSigns.forEach(drawWood));
+signArt.src = 'ui/sign.webp';
+function panel(text, w, h) { // flat wooden sign facing +z
+  const sign = woodTex(text, w / h);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: sign.tex, transparent: true }));
+  m.userData.sign = sign;
   scene.add(m);
   return m;
-}
-function setText(obj, text, bg = '#000a', fg = '#fff') { // re-letter a panel or a sign face
-  obj.material.map.dispose();
-  obj.material.map = labelTex(text, bg, fg, obj.userData.aspect);
 }
 const steel = new THREE.MeshStandardMaterial({ color: 0xc9ced2, metalness: 0.6, roughness: 0.35 });
 const wood = mat(0x6b3f22), dark = mat(0x222222);
@@ -1316,9 +1364,10 @@ function plaque(text, w, h, x, y, z, ry = 0, bg = '#2a1a10', fg = '#f4e4c8', two
   const g = new THREE.Group();
   g.position.set(x, y, z);
   g.rotation.y = ry;
-  part(new THREE.BoxGeometry(w + 0.06, h + 0.06, 0.04), wood, 0, 0, 0, g);
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: labelTex(text, bg, fg, w / h) }));
-  face.userData.aspect = w / h;
+  part(new THREE.BoxGeometry(w * 0.94, h * 0.84, 0.03), wood, 0, 0, 0, g); // hidden behind the sign's rounded panel
+  const sign = woodTex(text, w / h, SIGN_ICON[text] || null);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: sign.tex, transparent: true }));
+  face.userData.sign = sign;
   face.position.z = 0.021;
   g.add(face);
   if (twoSided) {
@@ -1375,7 +1424,7 @@ const bins = ITEM_KEYS.map((id, i) => {
   const x = 0.45 + BIN_W * (i + 0.5);
   const hit = part(new THREE.BoxGeometry(BIN_W - 0.07, 1.7, 0.75), hitMat, x, 0.95, -11.5);
   hit.userData = { kind: 'bin', ref: id };
-  const label = panel('', BIN_W - 0.06, 0.27);
+  const label = panel('', BIN_W - 0.06, 0.3); // readable from the doorway
   label.position.set(x, 1.95, -11.14);
   const shows = [0, 1, 2, 3].map(k => {
     const m = makeItemMesh(id);
@@ -1587,7 +1636,7 @@ function syncTray(t) { // clear leftovers of a party that is gone, work out READ
   const key = t.away ? 'out' : t.ready ? 'ready' : 'wait';
   if (key === t.key) return;
   t.key = key;
-  for (const l of t.labels) setText(l.userData.face, `TABLE ${t.n}${t.away ? ' · OUT' : t.ready ? ' · READY' : ''}`, t.away ? '#3a3a3a' : t.ready ? '#1f7a34' : '#1a1a1a', '#e8f1f2');
+  for (const l of t.labels) setSign(l.userData.face, `TABLE ${t.n}${t.away ? ' · OUT' : t.ready ? ' · READY' : ''}`, 'tray', t.away ? '#b9ab95' : t.ready ? '#7dff8a' : CREAM);
 }
 passTrays.forEach(syncTray);
 function serveTray(t, c) { // everything on the tray goes on the table: dishes first, then their sauce cups
@@ -1636,7 +1685,7 @@ function refreshSauces() {
   for (const h of holders) {
     const n = sauceLevel[h.s];
     h.bottle.visible = n > 0;
-    setText(h.label.userData.face, `${SAUCES[h.s].short.toUpperCase()} ${n}/${ITEMS[h.s + '_bottle'].cups}`, n ? '#1f3a24' : '#3a1f1f', '#e8f1f2');
+    setSign(h.label.userData.face, `${n}/${ITEMS[h.s + '_bottle'].cups}`, h.s, n ? CREAM : '#ff8a80');
   }
 }
 refreshSauces();
@@ -1830,15 +1879,15 @@ const qTag = q => (q ? ` · ${QUALITY[q].name}` : '');
 function refreshStorage() {
   for (const b of bins) {
     const n = stock[b.id].length;
-    setText(b.label, `${ITEMS[b.id].name.toUpperCase()}\n×${n}`, n ? '#0b3d5c' : '#333a');
+    setSign(b.label, `×${n}`, ITEMS[b.id].dish || ITEMS[b.id].sauce, n ? CREAM : '#b9ab95');
     b.shows.forEach((m, k) => { m.visible = k < n; });
   }
-  setText(capPlaque.userData.face, `COLD STORAGE  ${usedSpace()}/${capacity()}`, '#0b3d5c', '#e6f6ff');
+  setSign(capPlaque.userData.face, `COLD STORAGE  ${usedSpace()}/${capacity()}`);
 }
 function refreshTrays() {
   for (const t of trayObjs) {
     const n = trays[t.d].length;
-    setText(t.label.userData.face, `${FOODS[t.d].name.toUpperCase()} ×${n}`, '#1a1a1a', '#e8f1f2');
+    setSign(t.label.userData.face, `×${n}`, t.d);
     t.shows.forEach((m, k) => { m.visible = k < n; });
   }
 }
