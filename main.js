@@ -322,7 +322,7 @@ flat(16, 12, texMat('calcareas', 16 / 1.2, 12 / 1.2), 0, 0); // dining room: cal
 const kitchenTiles = texMat('floor', 6.7, 2.5);
 kitchenTiles.color.set(0xbfc8c8);
 flat(16, 6, kitchenTiles, 0, -9);                // back of house
-flat(3.6, 3.2, 0x8a6040, -6.2, -10.4, 0.003);    // office floor
+flat(3.6, 3.2, texMat('wood', 3, 2.7), -6.2, -10.4, 0.003); // office floor: wooden planks
 flat(6, 8, 0x9a9a95, 11, -9, 0.002);             // delivery yard
 
 const WALL = 0xf0e0c0, WH = 3.5;
@@ -341,10 +341,12 @@ box(16.2, WH, 0.2, brickMats(16.2, WH, 0.2), 0, WH / 2, -12);
 box(0.2, WH, 1.6, brickMats(0.2, WH, 1.6), 8, WH / 2, -11.2);      // east wall, back door at z -10.4..-9
 box(0.2, WH, 3, brickMats(0.2, WH, 3), 8, WH / 2, -7.5);
 box(0.2, 1.1, 1.4, brickMats(0.2, 1.1, 1.4), 8, WH - 0.55, -9.7, false);
-box(2, WH, 0.2, WALL, -7, WH / 2, -8.8);        // office, door at x -6..-4.8
-box(0.4, WH, 0.2, WALL, -4.6, WH / 2, -8.8);
-box(1.2, 1.1, 0.2, WALL, -5.4, WH - 0.55, -8.8, false);
-box(0.2, WH, 3.2, WALL, -4.4, WH / 2, -10.4);
+box(2, WH, 0.2, plaster(2, WH, 0.2), -7, WH / 2, -8.8);        // office (plaster), door at x -6..-4.8
+box(0.4, WH, 0.2, plaster(0.4, WH, 0.2), -4.6, WH / 2, -8.8);
+box(1.2, 1.1, 0.2, plaster(1.2, 1.1, 0.2), -5.4, WH - 0.55, -8.8, false);
+box(0.2, WH, 3.2, plaster(0.2, WH, 3.2), -4.4, WH / 2, -10.4);
+part(new THREE.PlaneGeometry(3.4, WH), texMat('plaster', 3.4 / 2.4, WH / 2.4), -6.2, WH / 2, -11.89).castShadow = false; // over the brick inside the office
+part(new THREE.PlaneGeometry(3, WH), texMat('plaster', 3 / 2.4, WH / 2.4), -7.89, WH / 2, -10.4).rotation.y = Math.PI / 2;
 // delivery yard: low walls, painted loading zone, sign
 for (const [w, d, x, z] of [[6, 0.15, 11, -13], [6, 0.15, 11, -5], [0.15, 8, 14, -9], [0.15, 1, 8, -12.5]]) box(w, 1.1, d, 0x9d9d98, x, 0.55, z);
 const stripe = mat(0xf2c230);
@@ -1516,15 +1518,28 @@ extraShelf.g.visible = extraShelf.col.on = false;
 // office: desk, chair, filing cabinet and the ASADO OS computer
 const desk = box(1.6, 0.76, 0.8, mat(0x7a5230), -6.3, 0.38, -11.45);
 desk.userData.kind = 'terminal';
-part(new THREE.BoxGeometry(0.5, 0.08, 0.5), dark, -6.3, 0.48, -10.5);
-part(new THREE.BoxGeometry(0.5, 0.55, 0.06), dark, -6.3, 0.8, -10.25);
-part(rod(0.03, 0.44), iron, -6.3, 0.22, -10.5);
-part(new THREE.BoxGeometry(0.45, 0.02, 0.15), dark, -6.3, 0.77, -11.25);
+const officeChair = [part(new THREE.BoxGeometry(0.5, 0.08, 0.5), dark, -6.3, 0.48, -10.5), part(new THREE.BoxGeometry(0.5, 0.55, 0.06), dark, -6.3, 0.8, -10.25),
+  part(rod(0.03, 0.44), iron, -6.3, 0.22, -10.5), part(new THREE.BoxGeometry(0.45, 0.02, 0.15), dark, -6.3, 0.77, -11.25)]; // with the keyboard
 box(0.5, 1.2, 0.5, mat(0x5a5f66), -7.6, 0.6, -9.4);
 const monitor = new THREE.Group();
 monitor.position.set(-6.3, 1.12, -11.62);
-part(new THREE.BoxGeometry(0.62, 0.42, 0.05), dark, 0, 0, 0, monitor);
-part(new THREE.BoxGeometry(0.06, 0.2, 0.06), dark, 0, -0.28, -0.02, monitor);
+const monitorBody = [part(new THREE.BoxGeometry(0.62, 0.42, 0.05), dark, 0, 0, 0, monitor), part(new THREE.BoxGeometry(0.06, 0.2, 0.06), dark, 0, -0.28, -0.02, monitor)];
+// the office in the Higgsfield style: the table as the desk, a bentwood chair, the register's computer for ASADO OS
+// (its screen sits on the computer's glass and keeps working), the logo and the tango poster, a crate and a box
+onProp('table', L => { desk.material = hitMat; const m = makeProp(L); m.scale.set(1.333, 0.962, 0.696); m.position.set(-6.3, 0, -11.45); scene.add(m); });
+onProp('chair', L => { officeChair.forEach(m => { m.visible = false; }); const m = makeProp(L); m.position.set(-6.3, 0, -10.45); m.rotation.y = Math.PI; scene.add(m); });
+onProp('pos', L => {
+  monitorBody.forEach(m => { m.visible = false; });
+  const m = makeProp(L);
+  m.scale.setScalar(1.111);
+  m.position.set(0.019, -0.6225, -0.0968);
+  monitor.add(m);
+  monitor.position.set(-6.3, 1.3825, -11.33); // stands on the desk, clear of the wall
+});
+picture('logo', 0.9, 0.5, -5.2, 2.35, -11.875, 0);
+picture('poster_tango', 0.5, 0.67, -7.875, 1.8, -10.3, Math.PI / 2);
+part(new THREE.BoxGeometry(0.5, 0.4, 0.4), crateMat, -7.55, 0.2, -11.6).rotation.y = 0.12;
+part(new THREE.BoxGeometry(0.42, 0.34, 0.36), cardboardMat, -7.6, 0.17, -11.05).rotation.y = -0.2;
 const osScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.36), new THREE.MeshBasicMaterial({ map: labelTex('ASADO OS\nUPGRADES · WHOLESALE\nFINANCES', '#10231a', '#9fe0b0', 0.56 / 0.36) }));
 osScreen.position.z = 0.026;
 monitor.add(osScreen);
