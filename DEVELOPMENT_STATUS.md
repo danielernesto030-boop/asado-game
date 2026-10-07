@@ -41,6 +41,7 @@ is commit 172ceab. Last updated with the "Higgsfield block 2: interior" phase.
 | Signs | Physical plaques: KITCHEN, STORAGE, OFFICE, PREP STATION, COLD STORAGE (capacity), PEDIDOS, CAJA, PARRILLA (on the hood), SERVICE, SAUCES, DELIVERY, table number blocks, crate lid labels, bin and tray labels |
 | Status | Grill slot lamps (yellow cooking, green ready, flashing red, dark burnt); guest mood badge below 50% / 25% patience; patience % in the table prompt |
 | Interior | Higgsfield textures: calcáreas floor, plaster dining walls, brick grill and kitchen walls, tiled wall behind the prep station, counter wood, wooden plank ceiling and beams (closed over the whole building), gingham tablecloths. Higgsfield models: tables, bentwood chairs (seat at SEAT_TOP), the register (the interactive screen sits on its monitor), plants in the dining corners, a wine rack, a plate shelf with siphons. Pictures: the filete menu board, which shows today's prices (dishes not on today's menu are wiped off), the filete logo above the entrance and on a sign over the counter, tango and fútbol posters. Pendant lamps with a warm light over each table, a light blue and white pennant garland over the counter, warm lighting. Also windows, wainscoting, wine shelf, charcoal sacks, low dividers, order screens |
+| HUD | Lilita One with an outline everywhere. A wooden sign at the top right shows day, time and money (green) with a small OPEN/CLOSED badge. A hanging sign shows while an event like LUNCH RUSH is on. The prompt is an E-key icon with a coloured pill. Looking at a table or its tray shows an order card: food icons, a check once a dish is on the tray, TABLE n, the total and a happy or angry face. The object you look at gets a warm tint. Food icons also appear on the register receipt, the wholesale list and the end-of-day sales list, and the end-of-day summary uses the wooden style |
 | Better Interior | Framed pictures and two more plants (its pendant lamps are now always there) |
 | Hands | Carried things sit small in the lower right; stacks of up to 4 raw portions of one kind (E adds one, hold E for more), all ready grill pieces in one E; cutting with a knife, pouring bottle → cup |
 | Characters | Three Higgsfield guest models (gaucho grandpa, football fan, señora); the room picks the type it has least of, and a repeat gets a light tint and 0.95–1.05 size. The asador model is used for every employee, with the beret showing the role (grill cook red, server black, prep cook white). Each GLB loads once and is shared. Code-only toy animation: waddle walk, breathing and sway when standing, sitting with the legs tucked and a slight lean back |
@@ -70,6 +71,9 @@ fixes, and the server carrying a tray was not seen within the day 4 window. `pla
 `playtest-service` were not re-run for the characters.
 Higgsfield block 2: `npm run build` plus one load check. All models and textures loaded and there were no
 console errors. No gameplay runs, as asked.
+Higgsfield block 3: `npm run build` passes. A probe of the built game found no page errors: the loop runs and
+the E-key pill renders. The one visual check (with a retry) never got a party to order, because its scene had
+no food in stock, so the order card and summary were not looked at.
 
 ## Known limitations
 

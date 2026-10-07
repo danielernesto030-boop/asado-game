@@ -134,7 +134,7 @@ let busy = null;                                                 // a timed hand
 let uiMode = null, summaryTimer = 0;                             // uiMode: 'os' | 'summary' | 'pos'
 let drawer = FLOAT;                                              // cash in the register drawer
 const transactions = [];                                         // completed payments
-const newDay = () => ({ sales: 0, tips: 0, card: 0, cash: 0, food: 0, staff: 0, upgrades: 0, guests: 0, lost: 0, deposit: 0 });
+const newDay = () => ({ sales: 0, tips: 0, card: 0, cash: 0, food: 0, staff: 0, upgrades: 0, guests: 0, lost: 0, deposit: 0, sold: {} });
 let today = newDay();
 const history = [];
 
@@ -432,10 +432,11 @@ const grillSpeed = () => (has('grillq') ? 1.35 : 1);
 // one lamp per spot on the brick front (the upper lamp is the back row): yellow cooking, green ready, flashing red before it burns
 const slotLights = SLOTS.map(([x, z]) => part(new THREE.BoxGeometry(0.15, 0.05, 0.02), new THREE.MeshBasicMaterial({ color: 0x333333 }), x, z < -5.3 ? 0.82 : 0.73, -4.84));
 slotLights.forEach((l, i) => { l.visible = i < slotCount(); });
+let grillModel = null; // the parrilla model once loaded (the look-at highlight shows on it)
 onProp('parrilla', L => { // the Higgsfield parrilla: its grate spans x 3.2..5.8 (every spot) with the bars at 0.94, the basket at the old brasero
   grillDeco.visible = false;
   grill.material = brasero.material = coals.material = hitMat; // still the collider and the interaction target
-  const m = makeProp(L);
+  const m = grillModel = makeProp(L);
   m.position.set(4.644, 0, -5.29);
   scene.add(m);
   slotLights.forEach((l, i) => { l.position.set(SLOTS[i][0], SLOTS[i][1] < -5.3 ? 0.855 : 0.805, -4.672); l.scale.y = 0.7; }); // on its front lip
@@ -1062,8 +1063,8 @@ function billLines(c) { // receipt lines: dishes (by meat quality) and sauce cup
   for (const it of c.items) {
     if (!it.served) continue;
     const key = it.dish + it.q;
-    (lines[key] ||= { name: FOODS[it.dish].name + (it.q ? ` ${QUALITY[it.q].name}` : ''), qty: 0, each: Math.round(FOODS[it.dish].price * QUALITY[it.q].price) }).qty++;
-    if (it.sauce && it.sauced) (lines[it.sauce] ||= { name: SAUCES[it.sauce].name, qty: 0, each: SAUCES[it.sauce].price }).qty++;
+    (lines[key] ||= { name: FOODS[it.dish].name + (it.q ? ` ${QUALITY[it.q].name}` : ''), qty: 0, each: Math.round(FOODS[it.dish].price * QUALITY[it.q].price), icon: it.dish }).qty++;
+    if (it.sauce && it.sauced) (lines[it.sauce] ||= { name: SAUCES[it.sauce].name, qty: 0, each: SAUCES[it.sauce].price, icon: it.sauce }).qty++;
   }
   return Object.values(lines);
 }
@@ -1092,6 +1093,7 @@ function goPay(c) { // the party gets up: the guests head out, the leader queues
 }
 function completePayment(c, method, tip) {
   const total = billTotal(c);
+  for (const l of billLines(c)) today.sold[l.icon] = (today.sold[l.icon] || 0) + l.qty; // for the end-of-day sales list
   if (method === 'cash') { drawer += total + tip; today.cash += total; } else { money += total + tip; today.card += total; }
   today.sales += total;
   today.tips += tip;
@@ -2042,9 +2044,10 @@ function showSummary() {
   history.push({ day, ...today, revenue: revenue(today), profit });
   const row = (a, v) => `<tr><td>${a}</td><td class="num">${fmtMoney(v)}</td></tr>`;
   sumEl.innerHTML = `<div class="win"><div class="bar"><span>DAY ${day} COMPLETE</span><span>ASADO OS</span></div><div class="pane"><table>
-    ${row('Sales', today.sales)}${row('Tips', today.tips)}${row('Food cost', -today.food)}${row('Staff cost', -today.staff)}${row('Upgrade cost', -today.upgrades)}
+    ${row(`${icon('coin')}Sales`, today.sales)}${row(`${icon('star')}Tips`, today.tips)}${row(`${icon('plate')}Food cost`, -today.food)}${row(`${icon('chef')}Staff cost`, -today.staff)}${row(`${icon('sack')}Upgrade cost`, -today.upgrades)}
     <tr><td class="big">PROFIT</td><td class="num big ${profit < 0 ? 'neg' : 'pos'}">${fmtMoney(profit)}</td></tr></table>
-    <p class="muted">${today.guests} guests · ${today.lost} lost · card ${fmtMoney(today.card)} · cash ${fmtMoney(today.cash)} · ${fmtMoney(today.deposit)} cash banked, the ${fmtMoney(FLOAT)} float stays in the drawer</p>
+    ${Object.keys(today.sold).length ? `<p>${Object.entries(today.sold).map(([k, n]) => `<span style="white-space:nowrap;margin-right:14px">${icon(k)}${n}× ${(FOODS[k] || SAUCES[k]).name}</span>`).join('')}</p>` : ''}
+    <p class="muted">${icon('happy')}${today.guests} guests · ${icon('angry')}${today.lost} lost · card ${fmtMoney(today.card)} · cash ${fmtMoney(today.cash)} · ${fmtMoney(today.deposit)} cash banked, the ${fmtMoney(FLOAT)} float stays in the drawer</p>
     <div class="foot"><span class="muted">Money: ${fmtMoney(money)} · Restock at the office terminal before you open tomorrow</span>
     <button data-a="next">CONTINUE TO NEXT DAY</button></div></div></div>`;
   uiMode = 'summary';
@@ -2107,7 +2110,7 @@ function renderOS() {
     const qBtns = QUALITY.map((q, i) => `<button data-a="q" data-v="${i}" class="${wsQ === i ? 'on' : ''}"${i > lvl('quality') ? ' disabled' : ''}>${q.name}</button>`).join(' ');
     body = `<p class="muted">MEAT QUALITY ${qBtns}</p>
       <table><tr><th>ITEM</th><th>PACK</th><th class="num">PRICE</th><th class="num">QUANTITY</th><th class="num">TOTAL</th></tr>
-      ${wsItems().map(k => `<tr><td>${ITEMS[k].name}</td><td class="muted">${ITEMS[k].whole ? `whole · ${portionsPer()} portions` : ITEMS[k].cups ? `${ITEMS[k].pack} bottles · ${ITEMS[k].cups} cups each` : `${ITEMS[k].pack} pieces`}</td>
+      ${wsItems().map(k => `<tr><td>${icon(ITEMS[k].dish || ITEMS[k].sauce)}${ITEMS[k].name}</td><td class="muted">${ITEMS[k].whole ? `whole · ${portionsPer()} portions` : ITEMS[k].cups ? `${ITEMS[k].pack} bottles · ${ITEMS[k].cups} cups each` : `${ITEMS[k].pack} pieces`}</td>
         <td class="num">${fmtMoney(packCost(k, wsQ))}</td>
         <td class="num"><button data-a="qty" data-v="${k}" data-d="-1">−</button> ${wsQty[k]} <button data-a="qty" data-v="${k}" data-d="1">+</button></td>
         <td class="num">${fmtMoney(wsQty[k] * packCost(k, wsQ))}</td></tr>`).join('')}</table>
@@ -2341,7 +2344,9 @@ function drawPOS() { // a tiny fictional desktop: menu bar, register line, ticke
     const total = billTotal(c);
     text(`TABLE ${c.table.n} · ${1 + c.members.length} guest${c.members.length ? 's' : ''}`, 292, 104, 26, '#24160a');
     billLines(c).slice(0, 8).forEach((l, i) => {
-      text(`${l.qty}× ${l.name}`, 292, 146 + i * 30, 21, '#3b2f25', 'left', false);
+      const im = iconImg(l.icon);
+      if (im.complete && im.naturalWidth) g.drawImage(im, 290, 132 + i * 30, 28, 28);
+      text(`${l.qty}× ${l.name}`, 324, 146 + i * 30, 21, '#3b2f25', 'left', false);
       text(fmtMoney(l.qty * l.each), 700, 146 + i * 30, 21, '#3b2f25', 'right', false);
     });
     g.fillStyle = '#d8cdbd'; g.fillRect(292, 398, 408, 2);
@@ -2540,7 +2545,9 @@ let currentAction = null;
 function updateInteraction() {
   if (uiMode) {
     currentAction = null;
-    promptEl.textContent = uiMode === 'pos' ? 'Use the mouse on the register screen · Esc to step away' : '';
+    setPrompt(uiMode === 'pos' ? 'Use the mouse on the register screen · Esc to step away' : '');
+    showCard(null);
+    highlight(null);
     return;
   }
   raycaster.setFromCamera(center, camera);
@@ -2549,7 +2556,9 @@ function updateInteraction() {
   const hit = raycaster.intersectObjects(targets, true)[0];
   const o = hit && customerTarget(hit.object);
   currentAction = o && !busy ? getAction(o) : null;
-  promptEl.textContent = currentAction ? currentAction.label : held ? `Carrying: ${heldName()}` : '';
+  setPrompt(currentAction ? currentAction.label : held ? `Carrying: ${heldName()}` : '');
+  showCard(o);
+  highlight(o);
 }
 
 // ---------- HUD ----------
@@ -2574,13 +2583,72 @@ function hintText() { // one line telling the player what to do next
   if (!everOpened) return 'All stocked! Open the restaurant at the OPEN/CLOSED sign by the front door';
   return 'Buy food and upgrades at the OFFICE terminal, then open at the sign by the front door';
 }
+// HUD icons (public/ui, cut from the Higgsfield icon sheets) and the wooden signs
+const icon = name => `<img class="ico" src="ui/${name}.webp" alt="">`;
+const iconImgs = {};
+function iconImg(name) { // for canvases (the register); redraws the register once it has loaded
+  if (!iconImgs[name]) { const im = iconImgs[name] = new Image(); im.onload = () => { pos.dirty = true; }; im.src = `ui/${name}.webp`; }
+  return iconImgs[name];
+}
+const eventEl = document.getElementById('event'), cardEl = document.getElementById('card');
 let hudKey = '';
 function updateHUD() {
   const hint = hintText(), rush = rushNow(), key = `${day}|${Math.floor(clockMin)}|${money}|${isOpen}|${hint}|${rush && rush.name}`;
   if (key === hudKey) return;
   hudKey = key;
-  hudEl.innerHTML = `DAY ${day} · ${fmtTime(clockMin)} · <span class="money">${fmtMoney(money)}</span><span class="st ${isOpen ? 'open' : 'closed'}">${isOpen ? 'OPEN' : 'CLOSED'}</span>${rush ? `<span class="st rush">${rush.name}</span>` : ''}`;
+  hudEl.className = 'hud wood';
+  hudEl.innerHTML = `<span>${icon('calendar')} DAY ${day}</span><span>${icon('clock')} ${fmtTime(clockMin)}</span><span class="money">${icon('coin')} ${fmtMoney(money)}</span><span class="st ${isOpen ? 'open' : 'closed'}">${isOpen ? 'OPEN' : 'CLOSED'}</span>`;
+  eventEl.hidden = !rush; // the hanging sign shows only while an event is on
+  if (rush) eventEl.innerHTML = `${icon('flame')} ${rush.name}`;
   hintEl.textContent = hint;
+}
+let promptKey = null;
+function setPrompt(label) { // [E] actions get the E key and an orange pill, anything else a plain wooden pill
+  if (label === promptKey) return;
+  promptKey = label;
+  const act = label.startsWith('[E] ');
+  promptEl.innerHTML = !label ? '' : act ? `${icon('key_e')}<span class="pill">${label.slice(4)}</span>` : `<span class="pill info">${label}</span>`;
+}
+let cardKey = null;
+function showCard(o) { // looking at a table or its tray: the party's order with icons, a check once it is on the tray
+  const k = o && o.userData.kind, t = k === 'table' ? o.userData.ref : k === 'passTray' ? tables[o.userData.ref.n - 1] : null, c = t && t.customer;
+  if (!c || !c.items) { if (cardKey !== '') { cardKey = ''; cardEl.hidden = true; } return; }
+  const tray = passTrays[t.n - 1], lines = {};
+  for (const i of c.items) (lines[i.dish + '|' + (i.sauce || '')] ||= { dish: i.dish, sauce: i.sauce, n: 0, done: 0 }).n++;
+  for (const l of Object.values(lines)) {
+    const onTray = tray.items.filter(x => x.kind === 'dish' && x.type === l.dish).length;
+    l.done = Math.min(l.n, c.items.filter(i => i.dish === l.dish && i.sauce === l.sauce && i.served).length + onTray);
+  }
+  const total = c.items.reduce((n, i) => n + Math.round(FOODS[i.dish].price * QUALITY[i.q || 0].price) + (i.sauce ? SAUCES[i.sauce].price : 0), 0);
+  const p = c.state === 'wait' ? c.patience / c.maxPatience : 1;
+  const key = JSON.stringify([t.n, lines, total, p >= 0.5]);
+  if (key === cardKey) return;
+  cardKey = key;
+  cardEl.innerHTML = `<div class="head"><span>TABLE ${t.n}</span>${icon(p >= 0.5 ? 'happy' : 'angry')}</div>`
+    + Object.values(lines).map(l => `<div class="row">${icon(l.dish)}${l.sauce ? icon(l.sauce) : ''}<span>${l.n}×</span>${l.done ? `<span class="ok">${l.done === l.n ? '✔' : `${l.done}/${l.n} ✔`}</span>` : ''}</div>`).join('')
+    + `<div class="tot">${icon('coin')} ${fmtMoney(total)}</div>`;
+  cardEl.hidden = false;
+}
+// look-at highlight: a warm emissive tint on the visible meshes of the target (materials cloned once, no post-processing)
+const hlMats = new WeakMap();
+let hlObj = null, hlList = [];
+function hlTint(m) {
+  if (!m.emissive) return m;
+  let h = hlMats.get(m);
+  if (!h) { h = m.clone(); h.emissive = m.emissive.clone().add(new THREE.Color(0x4a2a08)); hlMats.set(m, h); }
+  return h;
+}
+function highlight(o) {
+  const k = o && o.userData.kind, show = k === 'grill' ? grillModel : k === 'bin' ? bins.find(b => b.id === o.userData.ref)?.shows : o;
+  if (o === hlObj) return;
+  for (const [mesh, mat] of hlList) mesh.material = mat;
+  hlList = [];
+  hlObj = o;
+  for (const s of [].concat(show || [])) s.traverse(mesh => {
+    if (!mesh.isMesh || !mesh.visible || mesh.material === hitMat) return;
+    hlList.push([mesh, mesh.material]);
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(hlTint) : hlTint(mesh.material);
+  });
 }
 let screenKey = '', screenT = 0;
 function drawScreens(dt) { // counter POS + kitchen display: active orders per table

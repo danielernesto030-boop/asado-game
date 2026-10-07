@@ -6,6 +6,8 @@ A first-person 3D Argentine parrilla management game. Three.js + Vite, no other 
   register, plants, wine rack and plate shelf.
 - Floors, walls, counters, ceiling and tablecloths use the textures in `public/textures`.
 - The menu board, the logo signs and the two posters are pictures.
+- HUD (block 3): Lilita One (`public/fonts`, OFL); icons cut from the Higgsfield icon sheets and the wooden sign
+  panel (`public/ui/*.webp`).
 
 Everything else is still procedural low-poly geometry, and the remaining signs and screens are canvas textures.
 The frozen pre-Higgsfield version is commit 172ceab, published at its own artifact link, which must never be
@@ -60,6 +62,10 @@ Conventions:
   characters, prepared by `prepProp` (bottom centre at the origin; the parrilla's grate section is stretched).
   `onProp(name, place)` swaps it in for the procedural stand-in, which stays until then. Colliders, hit boxes
   and stations never change. Decor is never added to `solids` or the ray targets, so it can't block interaction.
+- HUD: the `.wood` class draws the sign panel as a 9-slice (`border-image`), and `icon(name)` gives an `<img>`
+  of a `public/ui` icon (`iconImg` for canvases). The food icons are named after the `FOODS` and `SAUCES` keys.
+  In the HUD section, `setPrompt` draws the E-key pill, `showCard` the table order card and `highlight` the
+  look-at tint (materials cloned once, restored when you look away).
 - Keep the shader light count low (software rendering in tests is slow; each point light costs ~7%). The dining
   room has one warm point light per pendant lamp, 4 at most.
 - Prefer extending the data tables over new code paths; keep new code in the matching section.
