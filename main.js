@@ -120,6 +120,7 @@ const PROPS = {
   knife:          { file: 'knife.glb', rot: -2.117, scale: 0.26 },          // blade toward -z, lying flat
   board:          { file: 'cutting_board.glb', rot: 0, scale: 0.56 },
   prep_table:     { file: 'prep_table.glb', rot: Math.PI / 2, scale: 1 },   // stretched to the 2 x 0.7 m station
+  door:           { file: 'door.glb', rot: -Math.PI / 2, scale: 2.45 },   // street side +z, stretched to the doorway
 };
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
@@ -1400,13 +1401,22 @@ part(new THREE.BoxGeometry(1.2, 0.8, 0.07), new THREE.MeshStandardMaterial({ col
 part(new THREE.BoxGeometry(0.05, 0.05, 0.16), iron, 1.78, 1.05, 0, doorPivot);
 doorPivot.userData.kind = 'door';
 scene.add(doorPivot);
+onProp('door', L => { // the Higgsfield door hangs in the same pivot (same swing), filling the 1.96 x 2.45 doorway
+  doorPivot.children.forEach(m => { m.visible = false; });
+  const m = makeProp(L);
+  m.scale.set(1.45, 1, 0.25);
+  m.position.x = 0.98;
+  doorPivot.add(m);
+});
 box(0.06, 0.06, 0.5, 0x222222, -4.2, 2.36, 5.65, false); // sign bracket
 const signPivot = new THREE.Group();
 signPivot.position.set(-4.2, 1.95, 5.4);
 part(new THREE.BoxGeometry(0.02, 0.4, 0.02), iron, 0, 0.2, 0, signPivot);
-part(new THREE.BoxGeometry(0.94, 0.48, 0.04), wood, 0, -0.1, 0, signPivot);
-for (const [t, bg, z, ry] of [['CLOSED', '#b3261e', -0.021, Math.PI], ['OPEN', '#2e7d32', 0.021, 0]]) {
-  const f = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.4), new THREE.MeshBasicMaterial({ map: labelTex(t, bg, '#fff', 0.86 / 0.4) }));
+part(new THREE.BoxGeometry(0.56, 0.4, 0.03), wood, 0, -0.1, 0, signPivot); // hidden between the two filete faces
+for (const [t, z, ry] of [['closed', -0.021, Math.PI], ['open', 0.021, 0]]) { // ABIERTO/OPEN and CERRADO/CLOSED, the two sides of one sign
+  const map = loader.load(`ui/sign_${t}.webp`);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const f = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.49), new THREE.MeshBasicMaterial({ map, transparent: true }));
   f.position.set(0, -0.1, z);
   f.rotation.y = ry;
   signPivot.add(f);
@@ -1818,7 +1828,7 @@ for (const t of tables) {
   scene.add(g);
 }
 // windows (bright glass in wooden frames) and wainscoting around the dining room
-const glass = new THREE.MeshBasicMaterial({ color: 0xcfe6f2 });
+const glass = new THREE.MeshStandardMaterial({ color: 0xcfe6f2, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.1, depthWrite: false }); // see-through, catches highlights
 function windowAt(x, z, ry) {
   const g = new THREE.Group();
   g.position.set(x, 1.75, z);
