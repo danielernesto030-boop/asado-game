@@ -119,6 +119,7 @@ const PROPS = {
   meat_provoleta: { file: 'meat_provoleta.glb', rot: 0, scale: 0.27 },
   knife:          { file: 'knife.glb', rot: -2.117, scale: 0.26 },          // blade toward -z, lying flat
   board:          { file: 'cutting_board.glb', rot: 0, scale: 0.56 },
+  prep_table:     { file: 'prep_table.glb', rot: Math.PI / 2, scale: 1 },   // stretched to the 2 x 0.7 m station
 };
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
@@ -177,8 +178,8 @@ scene.add(sun);
 const grillLight = new THREE.PointLight(0xff7a2a, 3, 6);
 grillLight.position.set(4.5, 1.6, -4.8);
 scene.add(grillLight);
-const kitchenLight = new THREE.PointLight(0xfff0dc, 12, 14);
-kitchenLight.position.set(2.5, 3.2, -9);
+const kitchenLight = new THREE.PointLight(0xfff0dc, 8, 14);
+kitchenLight.position.set(0.8, 3.3, -10.3); // over the middle of the back of house, not glaring on the prep table
 scene.add(kitchenLight);
 const officeLight = new THREE.PointLight(0xffe2b0, 6, 7);
 officeLight.position.set(-6.2, 3, -10.4);
@@ -1442,6 +1443,13 @@ colliders.push(freezerCol);
 
 // prep station: cutting board between two portion trays (whole cut → portions)
 const prepTable = box(2, 0.9, 0.7, steel, 4.2, 0.45, -6.55);
+onProp('prep_table', L => { // the stainless prep table: work surface at 0.9 under the board and trays, back edge against the wall
+  prepTable.material = hitMat; // still the collider and the prep hit area
+  const m = makeProp(L);
+  m.scale.set(2, 1.557, 1.205);
+  m.position.set(4.2, 0, -6.55);
+  scene.add(m);
+});
 part(new THREE.PlaneGeometry(3, 1.35), texMat('kitchen_tiles', 3 / 1.35, 1), 4.2, 1.575, -6.102).rotation.y = Math.PI; // tiled wall behind the prep station
 prepTable.userData.kind = 'prep';
 const board = part(new THREE.BoxGeometry(0.55, 0.03, 0.38), mat(0xc49a6c), 4.2, 0.915, -6.6);
@@ -3003,6 +3011,8 @@ function updateHands(dt, moving) {
   }
   knife.visible = busy?.kind === 'cut';
   boardKnife.visible = busy?.kind !== 'cut';
+  handL.visible = !knife.visible; // cutting shows no arms: only the knife, chopping over the board
+  for (const m of handR.children) if (m !== knife) m.visible = !knife.visible;
   const pouring = busy?.kind === 'pour', tilt = pouring ? Math.max(0, Math.min(1, busy.t / 0.35, (busy.dur - busy.t) / 0.25)) : 0;
   handBottle.visible = handCup.visible = pouring;
   handBottle.rotation.z = 1.9 * tilt;
