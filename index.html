@@ -36,9 +36,13 @@
   #card .tot { margin-top: 4px; text-align: right; color: #7dff8a; }
   #msg { bottom: 112px; left: 50%; transform: translateX(-50%); font-size: 24px; color: #9f6; white-space: nowrap; }
   #cross { top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; }
-  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000b; cursor: pointer; text-align: center; }
-  #start h1 { font-size: 56px; margin: 0 0 10px; color: #ffb347; font-family: var(--hud-font); font-weight: 400; text-shadow: var(--outline); }
-  #start p { font-size: 18px; margin: 4px; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #000b; cursor: pointer; text-align: center; color: #fff6e0; font-family: var(--hud-font); letter-spacing: 0.02em; text-shadow: var(--outline); }
+  /* first start: the key art (it carries the logo), text over a dark fade at the bottom; the pause screen stays a plain dim */
+  #start.title { box-sizing: border-box; justify-content: flex-end; padding: 0 16px 5vh; background: linear-gradient(#0000 55%, #000d), #1a0e08 url(ui/title.jpg) center 30% / cover no-repeat; }
+  #start h1 { font-size: 56px; margin: 0 0 10px; color: #ffb347; font-weight: 400; }
+  #start.title h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  #start p { font-size: 20px; margin: 4px; }
+  #start b { display: inline-block; margin-top: 12px; padding: 8px 28px 6px; font-size: 30px; font-weight: 400; color: #fff; background: #e0781f; border: 3px solid #2a1408; border-radius: 999px; box-shadow: 0 3px 0 #2a1408; }
   /* ASADO OS terminal + end-of-day summary */
   .ui { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000c; font: 15px ui-monospace, Menlo, Consolas, monospace; }
   .win { width: min(920px, 94vw); max-height: 88vh; overflow: auto; background: #10231a; color: #cfe8d5; border: 2px solid #3f7a55; box-shadow: 0 0 40px #000a; }
@@ -81,7 +85,7 @@
 <div id="cross" class="hud"></div>
 <div id="event" class="hud wood" hidden></div>
 <div id="card" class="hud wood" hidden></div>
-<div id="start">
+<div id="start" class="title">
   <h1>ASADO TYCOON</h1>
   <p>WASD move · Mouse look · E interact · Esc pause</p>
   <p>Carry in supplies, cut the meat, grill, serve, then check the books and plan tomorrow.</p>

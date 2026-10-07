@@ -3008,7 +3008,7 @@ startEl.addEventListener('click', () => { initAudio(); lockPointer(); });
 // pointerlockchange): skip the first movement under a new lock and anything right after the change
 let lockedAt = 0, lockSeen = false;
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement) lockedAt = performance.now();
+  if (document.pointerLockElement) { lockedAt = performance.now(); startEl.classList.remove('title'); } // the key art is for the first start only
   startEl.style.display = document.pointerLockElement || uiMode ? 'none' : 'flex';
 });
 document.addEventListener('mousemove', e => {
