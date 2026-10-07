@@ -111,6 +111,14 @@ const PROPS = {
   plant:    { file: 'plant.glb', rot: 0, scale: 1 },
   winerack: { file: 'winerack.glb', rot: 0, scale: 1.1 },
   plates:   { file: 'plates_shelf.glb', rot: -Math.PI / 2, scale: 0.75 },
+  // raw food (longest side in metres, the bottom 3 cm under the origin like the procedural pieces), knife, cutting board
+  meat_filet:     { file: 'meat_filet.glb', rot: 0, scale: 0.17 },
+  meat_vacio:     { file: 'meat_vacio.glb', rot: 0, scale: 0.36 },
+  meat_bife:      { file: 'meat_bife.glb', rot: Math.PI / 2, scale: 0.32 },
+  meat_chorizo:   { file: 'meat_chorizo.glb', rot: 0, scale: 0.3 },
+  meat_provoleta: { file: 'meat_provoleta.glb', rot: 0, scale: 0.27 },
+  knife:          { file: 'knife.glb', rot: -2.117, scale: 0.26 },          // blade toward -z, lying flat
+  board:          { file: 'cutting_board.glb', rot: 0, scale: 0.56 },
 };
 const portionsPer = () => (has('prep') ? 8 : 6);
 const capacity = () => 30 + (has('cold') ? 20 : 0) + (has('storage') ? 30 : 0);
@@ -588,19 +596,104 @@ function foodMat(type) {
   m.color.setRGB(...FOODS[type].raw);
   return m;
 }
-function makeFoodMesh(type) {
-  foodGeo[type] ||= FOOD_GEO[type]();
-  const m = new THREE.Mesh(foodGeo[type], foodMat(type));
-  m.castShadow = true;
+// Higgsfield raw food: the models show raw meat; cookLook() turns a piece golden brown with grill marks, then burnt
+const GOLDEN = new THREE.Color(0.86, 0.56, 0.32), CHARRED = new THREE.Color(0.13, 0.09, 0.07);
+const grillMarks = loader.load('textures/grill_marks.webp'), burntTex = tex('burnt');
+grillMarks.colorSpace = THREE.SRGBColorSpace;
+grillMarks.wrapS = grillMarks.wrapT = THREE.RepeatWrapping;
+function foodMatGLB(base, type) { // per piece: grill marks (top faces, projected from above) and the burnt crust mix in by uniforms
+  const m = base.clone(), u = m.userData;
+  u.cook = { value: 0 };
+  u.burn = { value: 0 };
+  const marks = { value: type === 'provoleta' ? 0 : 1 }; // the cheese only browns
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, { uCook: u.cook, uBurn: u.burn, uMarkOn: marks, uMarks: { value: grillMarks }, uBurnt: { value: burntTex } });
+    sh.vertexShader = 'varying vec3 vFoodPos;\nvarying vec3 vFoodN;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vFoodPos = position;\n  vFoodN = normal;');
+    sh.fragmentShader = 'uniform float uCook;\nuniform float uBurn;\nuniform float uMarkOn;\nuniform sampler2D uMarks;\nuniform sampler2D uBurnt;\nvarying vec3 vFoodPos;\nvarying vec3 vFoodN;\n'
+      + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+  vec4 mk = texture2D(uMarks, vFoodPos.xz * 6.0);
+  diffuseColor.rgb = mix(diffuseColor.rgb, mk.rgb, mk.a * uCook * uMarkOn * smoothstep(0.35, 0.8, normalize(vFoodN).y));
+  diffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uBurnt, vFoodPos.xz * 4.0).rgb, uBurn);`);
+  };
+  m.customProgramCacheKey = () => 'food';
   return m;
+}
+function cookLook(mesh, cook, burn) { // cook 0 raw → 1 done; burn 0 → 1 burnt crust (false for a procedural piece)
+  const u = mesh.material.userData;
+  if (!u.cook) return false;
+  u.cook.value = cook;
+  u.burn.value = burn;
+  mesh.material.color.setRGB(1, 1, 1).lerp(GOLDEN, cook).lerp(CHARRED, burn);
+  return true;
+}
+function makeFoodMesh(type) {
+  const L = propLib['meat_' + type];
+  const m = L ? new THREE.Mesh(L.geo, foodMatGLB(L.mat, type)) : new THREE.Mesh(foodGeo[type] ||= FOOD_GEO[type](), foodMat(type));
+  m.castShadow = true;
+  m.foodType = type; // pieces made before the model loaded are swapped for it (see below)
+  return m;
+}
+for (const type of Object.keys(FOOD_GEO)) onProp('meat_' + type, L => {
+  L.geo.translate(0, -0.03, 0);
+  scene.traverse(o => {
+    if (o.foodType !== type || o.geometry === L.geo) return;
+    o.geometry = L.geo;
+    o.material = foodMatGLB(L.mat, type);
+    if (o.foodWhole) o.scale.multiply(o.foodWhole);
+  });
+});
+// cheap smoke and sizzle over the grill: two point clouds with fixed pools, each particle fading out
+const puffTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, '#fff'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+function puffs(n, size, rgb, alpha) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3).fill(-10), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 4), 4));
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size, map: puffTex, vertexColors: true, transparent: true, depthWrite: false }));
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return { geo, n, i: 0, life: new Float32Array(n), max: new Float32Array(n), vel: new Float32Array(n * 3), rgb, alpha };
+}
+const smoke = puffs(70, 0.3, [0.62, 0.6, 0.58], 0.32), sizzle = puffs(50, 0.035, [1, 0.72, 0.3], 0.95);
+function emit(s, x, y, z, vy, life, shade = 1) {
+  const i = s.i = (s.i + 1) % s.n, c = s.geo.attributes.color;
+  s.geo.attributes.position.setXYZ(i, x, y, z);
+  s.vel.set([(Math.random() - 0.5) * 0.12, vy, (Math.random() - 0.5) * 0.12], i * 3);
+  s.life[i] = s.max[i] = life;
+  c.setXYZW(i, s.rgb[0] * shade, s.rgb[1] * shade, s.rgb[2] * shade, 0);
+}
+function stepPuffs(s, dt) {
+  const p = s.geo.attributes.position, c = s.geo.attributes.color;
+  for (let i = 0; i < s.n; i++) {
+    if (s.life[i] <= 0) { if (c.getW(i)) { c.setW(i, 0); p.setY(i, -10); } continue; }
+    s.life[i] -= dt;
+    const k = Math.max(0, s.life[i] / s.max[i]);
+    p.setXYZ(i, p.getX(i) + s.vel[3 * i] * dt, p.getY(i) + s.vel[3 * i + 1] * dt, p.getZ(i) + s.vel[3 * i + 2] * dt);
+    c.setW(i, s.alpha * Math.min(1, (1 - k) * 6) * k);
+  }
+  p.needsUpdate = c.needsUpdate = true;
+}
+function grillFx(f, st, dt) { // light smoke and sizzle while it cooks, much more (and darker) smoke once it burns
+  const p = f.mesh.position, burnt = st === 'burnt', j = () => (Math.random() - 0.5) * 0.16;
+  if (Math.random() < dt * (burnt ? 9 : st === 'ready' ? 3 : 1.5)) emit(smoke, p.x + j(), 1.0, p.z + j(), 0.22 + Math.random() * 0.2, 1.4 + Math.random(), burnt ? 0.35 : 1);
+  if (!burnt && Math.random() < dt * 7) emit(sizzle, p.x + j(), 0.99, p.z + j(), 0.5 + Math.random() * 0.5, 0.3);
 }
 // cold-storage items: whole cuts get their own shape, everything else looks like its dish
 function makeItemMesh(it) {
   if (ITEMS[it].sauce) return makeBottle(ITEMS[it].sauce);
   if (it === 'filet_whole') {
     foodGeo.filet_whole ||= paint(new THREE.LatheGeometry([V2(0.001, -0.22), V2(0.04, -0.2), V2(0.062, -0.1), V2(0.07, 0.04), V2(0.06, 0.15), V2(0.032, 0.21), V2(0.001, 0.225)], 10).rotateZ(Math.PI / 2), 0xffffff);
+    if (propLib.meat_filet) { const w = makeFoodMesh('filet'); w.scale.set(2.6, 1.2, 0.9); return w; } // the whole tenderloin: a stretched medallion
     const m = new THREE.Mesh(foodGeo.filet_whole, foodMat('filet'));
     m.castShadow = true;
+    m.foodType = 'filet';
+    m.foodWhole = new THREE.Vector3(2.6, 1.2, 0.9);
     return m;
   }
   const m = makeFoodMesh(ITEMS[it].dish);
@@ -2635,7 +2728,14 @@ let hlObj = null, hlList = [];
 function hlTint(m) {
   if (!m.emissive) return m;
   let h = hlMats.get(m);
-  if (!h) { h = m.clone(); h.emissive = m.emissive.clone().add(new THREE.Color(0x4a2a08)); hlMats.set(m, h); }
+  if (!h) {
+    h = m.clone();
+    h.emissive = m.emissive.clone().add(new THREE.Color(0x4a2a08));
+    h.userData = m.userData; // a grilled piece keeps its cooking look
+    h.onBeforeCompile = m.onBeforeCompile;
+    h.customProgramCacheKey = m.customProgramCacheKey;
+    hlMats.set(m, h);
+  }
   return h;
 }
 function highlight(o) {
@@ -2860,12 +2960,16 @@ function frame() {
     for (const f of [...grillFood]) {
       f.t += dt * (f.t < FOODS[f.type].cook ? speed : 1); // Better Grill speeds up cooking, never the burn window
       const d = FOODS[f.type], st = foodState(f);
+      grillFx(f, st, dt);
+      if (cookLook(f.mesh, Math.min(1, f.t / d.cook), st === 'burnt' ? 1 : st === 'ready' ? (f.t - d.cook) / d.burn * 0.55 : 0)) continue;
       const col = new THREE.Color().setRGB(...d.raw);
       if (st === 'cooking') col.lerp(new THREE.Color(1, 1, 1), f.t / d.cook);
       else if (st === 'ready') col.setRGB(1, 1, 1).lerp(new THREE.Color(0.3, 0.2, 0.15), (f.t - d.cook) / d.burn * 0.7);
       else col.setRGB(0.02, 0.018, 0.018);
       f.mesh.material.color.copy(col);
     }
+    stepPuffs(smoke, dt);
+    stepPuffs(sizzle, dt);
     slotLights.forEach((l, i) => {
       const f = grillFood.find(g => g.slot === i), st = f && foodState(f), d = f && FOODS[f.type];
       l.visible = i < slotCount();
