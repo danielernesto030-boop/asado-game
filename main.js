@@ -1396,6 +1396,17 @@ prepTable.userData.kind = 'prep';
 const board = part(new THREE.BoxGeometry(0.55, 0.03, 0.38), mat(0xc49a6c), 4.2, 0.915, -6.6);
 board.userData.kind = 'prep';
 const boardKnife = part(new THREE.BoxGeometry(0.03, 0.01, 0.26), steel, 4.42, 0.935, -6.62);
+onProp('board', L => { // the Higgsfield cutting board, flattened to the old board's height; the box stays the prep hit area
+  board.material = hitMat;
+  const m = makeProp(L);
+  m.position.set(4.2, 0.9, -6.6);
+  m.scale.y = 0.5;
+  scene.add(m);
+});
+onProp('knife', L => { // the cuchillo criollo lies on the board (and is hidden with it while the hands cut)
+  boardKnife.geometry = new THREE.BufferGeometry();
+  boardKnife.add(makeProp(L));
+});
 const trayObjs = ['filet', 'vacio'].map((d, i) => {
   const x = i ? 4.95 : 3.45;
   const t = part(new THREE.BoxGeometry(0.44, 0.03, 0.34), steel, x, 0.915, -6.55);
@@ -2881,6 +2892,14 @@ const knife = new THREE.Group();
 knife.add(new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.035, 0.2).translate(0, -0.01, -0.13), steel), new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.09).translate(0, 0, -0.01), mat(0x2a1a10)));
 knife.visible = false;
 handR.add(knife);
+onProp('knife', L => {
+  knife.children.forEach(m => { m.visible = false; });
+  const m = makeProp(L);
+  m.rotation.z = Math.PI / 2; // blade upright for cutting
+  m.position.set(0.02, 0, -0.11); // handle in the grip, blade forward
+  m.castShadow = false;
+  knife.add(m);
+});
 const handPlate = new THREE.Mesh(plateGeo, plateMat);
 handPlate.visible = false;
 hands.add(handPlate);
